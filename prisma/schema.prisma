@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                   String    @id @default(cuid())
+  name                 String
+  slug                 String    @unique
+  twentyWorkspaceId    String
+  twentyApiKey         String    @db.Text
+  twentyWebhookSecret  String
+  scoringRules         ScoringRule[]
+  enableAutoOpportunity Boolean  @default(true)
+  opportunityThreshold Int       @default(60)
+  enableEnrichment     Boolean   @default(true)
+  enrichmentProviders  String[]  @default(["clearbit", "apollo", "hunter"])
+  enrichmentRequestsPerMonth Int @default(5000)
+  webhookRateLimit     Int       @default(1000)
+  plan                 String    @default("starter")
+  status               String    @default("active")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  deletedAt            DateTime?
+  webhookLogs          WebhookLog[]
+  auditLogs            AuditLog[]
+  scoreHistory         ScoreHistory[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model ScoringRule {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  rules       Json
+  enabled     Boolean  @default(true)
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([enabled])
+}
+
+model ScoreHistory {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personTwentyId      String
+  personName          String?
+  personEmail         String?
+  score               Int
+  factors             Json
+  ruleName            String?
+  opportunityCreated  Boolean  @default(false)
+  opportunityTwentyId String?
+  createdAt           DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([personTwentyId])
+}
+
+model EnrichmentProvider {
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  clearbitApiKey        String?
+  apolloApiKey          String?
+  hunterApiKey          String?
+  requestsUsedThisMonth Int      @default(0)
+  lastResetDate         DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+model EnrichedPerson {
+  id             String   @id @default(cuid())
+  tenantId       String
+  personTwentyId String
+  personEmail    String?
+  companyName    String?
+  companyDomain  String?
+  companySize    String?
+  industry       String?
+  location       String?
+  jobTitle       String?
+  jobFunction    String?
+  technologies   String[] @default([])
+  source         String?
+  confidence     Int      @default(100)
+  enrichedAt     DateTime @default(now())
+
+  @@unique([tenantId, personTwentyId])
+  @@index([tenantId, personEmail])
+}
+
+model WebhookLog {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  event       String
+  payload     Json
+  status      String    @default("queued")
+  error       String?
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  nextRetryAt DateTime?
+  jobId       String?
+  jobResult   Json?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([tenantId, status])
+  @@index([event])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id               String   @id @default(cuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action           String
+  resourceType     String?
+  resourceTwentyId String?
+  before           Json?
+  after            Json?
+  triggeredBy      String
+  webhookLogId     String?
+  success          Boolean  @default(true)
+  message          String?
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([action])
+  @@index([resourceTwentyId])
+}
+
+model JobResult {
+  id          String    @id @default(cuid())
+  tenantId    String
+  jobType     String
+  jobId       String
+  status      String    @default("processing")
+  input       Json
+  output      Json?
+  error       String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([tenantId, jobType])
+  @@index([status])
+}

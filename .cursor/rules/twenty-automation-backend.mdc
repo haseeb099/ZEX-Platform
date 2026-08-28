@@ -1,0 +1,27 @@
+---
+description: NestJS Twenty automation backend coding standards
+globs: "**/src/**/*.{ts,tsx},**/prisma/**/*,**/test/**/*.ts,docker-compose.yml,Dockerfile,package.json"
+alwaysApply: false
+---
+
+# Twenty Automation Backend Code
+
+## Modules
+
+Prefer: `tenants`, `webhooks`, `jobs`, `enrichment`, `scoring`, `twenty`, `audit`, `common`, `health`, `config`.
+
+## Patterns
+
+- Controllers thin; services own logic; Prisma via `PrismaService`.
+- Validate env with Joi/Zod at boot (`config/env.schema.ts`).
+- Structured logging via `LoggerService` (Pino) — no `console.log` in committed code.
+- Encrypt tenant API keys / webhook secrets before persist (`CryptoService`).
+- Job config: 5 attempts, exponential backoff, DLQ after max attempts.
+- Scoring returns `{ score, factors }` and persists `ScoreHistory`.
+- Map enrichment providers with ordered fallback: Clearbit → Apollo → Hunter → low-confidence fallback.
+
+## Tests
+
+- Unit: scoring, HMAC, crypto.
+- E2E: signed webhook → opportunity (mock Twenty).
+- Target ~80% unit coverage on core logic for MVP.

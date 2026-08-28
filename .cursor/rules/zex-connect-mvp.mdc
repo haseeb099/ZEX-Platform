@@ -1,0 +1,30 @@
+---
+description: ZEX Connect MVP — Twenty automation backend program rules (always on)
+alwaysApply: true
+---
+
+# ZEX Connect MVP
+
+Backend-only NestJS microservice beside Twenty CRM: webhooks → enrich → score → auto-opportunity → audit.
+
+## Source of truth
+
+1. Notion project: https://app.notion.com/p/3bedd43e0a9d8002b5d9d0b7246e7115
+2. Tasks: https://app.notion.com/p/9a5313099bd141828cdf01a108c9cdab
+3. Activity Log (CRUD): https://app.notion.com/p/0ecfc1f14b9f4d329f6a0014ba9a857e
+4. Repo docs: `docs/TWENTY_AUTOMATION_BACKEND_HANDOFF.md`, `docs/COMPLETE_STARTER_SCAFFOLD.md`, `docs/README_GETTING_STARTED.md`
+
+## Non-negotiables
+
+- **Scope:** backend + AI automation only. No Twenty fork, no Phase-1 frontend, no calling product scope.
+- **One Notion task at a time.** Move Status, then log CRUD in Activity Log.
+- **Audit-first:** every Twenty/local mutation has before/after AuditLog.
+- **Webhooks:** HMAC on raw body → 200 ACK → BullMQ. Never enrich inline. Fail closed on bad signature.
+- **Secrets:** AES-256-GCM at rest; never commit `.env` or keys.
+- **Tenancy:** every query scopes `tenantId`.
+- **Prefer scaffold** from `COMPLETE_STARTER_SCAFFOLD.md` over reinventing structure.
+- **Stack lock:** NestJS + Fastify, Prisma/Postgres 16, BullMQ/Redis, graphql-request, Zod, Pino.
+
+## Definition of Done (any task)
+
+Acceptance criteria met · tests updated · audit path covered if mutation · Notion Activity Log entry · no secrets in git.
