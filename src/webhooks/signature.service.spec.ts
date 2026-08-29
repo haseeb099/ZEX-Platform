@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { SignatureService } from './signature.service';
 
 describe('SignatureService', () => {
@@ -24,8 +25,7 @@ describe('SignatureService', () => {
     const payload = JSON.stringify({ eventName: 'person.created', record: { id: 'p1' } });
     const secret = 'whsec_test_secret';
     const stringToSign = `${timestamp}:${payload}`;
-    const signature = require('crypto')
-      .createHmac('sha256', secret)
+    const signature = createHmac('sha256', secret)
       .update(stringToSign, 'utf8')
       .digest('hex');
 
