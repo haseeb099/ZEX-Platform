@@ -2,8 +2,10 @@ import { createHmac } from 'crypto';
 import { SignatureService } from '../src/webhooks/signature.service';
 
 /**
- * Lightweight contract test for HMAC + scoring acceptance path.
- * Full Nest e2e harness can replace this once a dedicated Twenty mock is wired.
+ * E2E-lite: HMAC signature contract only.
+ * This is NOT a CRM ↔ Platform integration test.
+ * See `npm run test:contract` and docs/CRM_PLATFORM_CONTRACT_TESTS.md for
+ * fake-Twenty GraphQL + webhook→queue contract coverage.
  */
 describe('Webhook HMAC contract (e2e-lite)', () => {
   it('signs and verifies the person.created payload used in MVP flow', () => {
