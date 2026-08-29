@@ -12,8 +12,7 @@ export class IdempotencyService {
   isTimestampFresh(timestampValue: number, nowMs = Date.now()): boolean {
     if (!Number.isFinite(timestampValue)) return false;
     // Twenty sends milliseconds; legacy tests used seconds
-    const timestampMs =
-      timestampValue > 1_000_000_000_000 ? timestampValue : timestampValue * 1000;
+    const timestampMs = timestampValue > 1_000_000_000_000 ? timestampValue : timestampValue * 1000;
     const age = nowMs - timestampMs;
     return age >= 0 && age <= MAX_SKEW_MS;
   }

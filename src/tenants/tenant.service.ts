@@ -68,8 +68,7 @@ export class TenantService {
     }
 
     const base =
-      input.publicBaseUrl ||
-      `http://localhost:${this.config.get<number>('PORT') || 3000}`;
+      input.publicBaseUrl || `http://localhost:${this.config.get<number>('PORT') || 3000}`;
 
     return {
       tenantId: tenant.id,

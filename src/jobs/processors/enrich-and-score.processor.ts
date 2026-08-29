@@ -69,7 +69,11 @@ export class EnrichAndScoreProcessor extends WorkerHost {
       }
 
       const enrichmentData = await this.enrichment.enrichPerson(tenantId, person);
-      const { score, factors, ruleName } = await this.scoring.score(tenantId, person, enrichmentData);
+      const { score, factors, ruleName } = await this.scoring.score(
+        tenantId,
+        person,
+        enrichmentData,
+      );
 
       try {
         await this.twenty.updatePerson(apiKey, personTwentyId, {
