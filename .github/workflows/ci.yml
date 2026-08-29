@@ -66,14 +66,20 @@ jobs:
       - name: Validate Prisma schema
         run: npx prisma validate
 
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
       - name: Lint
         run: npx eslint "{src,test}/**/*.ts" --max-warnings=0
 
       - name: Unit tests
         run: npm test -- --runInBand
 
-      - name: E2E tests
+      - name: E2E-lite tests (HMAC contract only)
         run: npm run test:e2e -- --runInBand
+
+      - name: CRM platform contract tests
+        run: npm run test:contract
 
       - name: Build
         run: npm run build
