@@ -4,7 +4,6 @@ import {
   Controller,
   Headers,
   HttpCode,
-  Inject,
   NotFoundException,
   Param,
   Post,
@@ -67,9 +66,7 @@ export class WebhookController {
     const secret = this.crypto.decrypt(tenant.twentyWebhookSecret);
     const timestampHeader = webhookTimestamp || legacyTimestamp;
 
-    if (
-      !this.signatures.verifyTwentyWebhook(rawBody, signature, secret, timestampHeader)
-    ) {
+    if (!this.signatures.verifyTwentyWebhook(rawBody, signature, secret, timestampHeader)) {
       throw new UnauthorizedException({
         error: 'Invalid signature',
         code: 'WEBHOOK_SIGNATURE_MISMATCH',
