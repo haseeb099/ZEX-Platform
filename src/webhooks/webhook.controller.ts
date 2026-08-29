@@ -4,7 +4,6 @@ import {
   Controller,
   Headers,
   HttpCode,
-  NotFoundException,
   Param,
   Post,
   Req,
@@ -14,10 +13,10 @@ import { ApiTags } from '@nestjs/swagger';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { FastifyRequest } from 'fastify';
-import { CryptoService } from '@src/common/crypto.service';
 import { PrismaService } from '@src/common/prisma/prisma.service';
 import { LoggerService } from '@src/common/logger/logger.service';
 import { ENRICH_AND_SCORE_QUEUE } from '@src/jobs/jobs.constants';
+import { TwentyConnectionService } from '@src/twenty/twenty-connection.service';
 import { IdempotencyService } from './idempotency.service';
 import { SignatureService } from './signature.service';
 
@@ -36,7 +35,7 @@ type WebhookBody = {
 export class WebhookController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly crypto: CryptoService,
+    private readonly twentyConnections: TwentyConnectionService,
     private readonly signatures: SignatureService,
     private readonly idempotency: IdempotencyService,
     private readonly logger: LoggerService,
@@ -55,15 +54,10 @@ export class WebhookController {
     @Headers('x-twenty-timestamp') legacyTimestamp: string | undefined,
     @Req() req: FastifyRequest & { rawBody?: string },
   ) {
-    const tenant = await this.prisma.tenant.findFirst({
-      where: { id: tenantId, deletedAt: null, status: 'active' },
-    });
-    if (!tenant) {
-      throw new NotFoundException({ error: 'Tenant not found', code: 'TENANT_NOT_FOUND' });
-    }
+    // Fail closed: unknown/inactive tenant or missing connection throws from resolver.
+    const secret = await this.twentyConnections.resolveWebhookSecret(tenantId);
 
     const rawBody = req.rawBody ?? JSON.stringify(body);
-    const secret = this.crypto.decrypt(tenant.twentyWebhookSecret);
     const timestampHeader = webhookTimestamp || legacyTimestamp;
 
     if (!this.signatures.verifyTwentyWebhook(rawBody, signature, secret, timestampHeader)) {

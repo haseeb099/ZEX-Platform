@@ -1,7 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Injectable } from '@nestjs/common';
-import { CryptoService } from '@src/common/crypto.service';
 import { LoggerService } from '@src/common/logger/logger.service';
 import { PrismaService } from '@src/common/prisma/prisma.service';
 import { AuditService } from '@src/audit/audit.service';
@@ -30,7 +29,6 @@ type EnrichJobData = {
 export class EnrichAndScoreProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly crypto: CryptoService,
     private readonly enrichment: EnrichmentService,
     private readonly scoring: ScoringService,
     private readonly twenty: TwentyClient,
@@ -50,12 +48,12 @@ export class EnrichAndScoreProcessor extends WorkerHost {
 
     try {
       const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-      const apiKey = this.crypto.decrypt(tenant.twentyApiKey);
 
       const snapshot = job.data.personSnapshot;
       let person;
       try {
-        person = await this.twenty.getPerson(apiKey, personTwentyId);
+        // TwentyClient resolves tenant-specific graphqlUrl + API key centrally.
+        person = await this.twenty.getPerson(tenantId, personTwentyId);
       } catch {
         // Local/dev fallback when Twenty is unreachable — use webhook payload
         person = {
@@ -76,12 +74,12 @@ export class EnrichAndScoreProcessor extends WorkerHost {
       );
 
       try {
-        await this.twenty.updatePerson(apiKey, personTwentyId, {
+        await this.twenty.updatePerson(tenantId, personTwentyId, {
           jobTitle: enrichmentData.jobTitle || person.jobTitle || undefined,
           company: enrichmentData.companyName || undefined,
           location: enrichmentData.location || undefined,
         });
-        await this.twenty.createNote(apiKey, {
+        await this.twenty.createNote(tenantId, {
           personId: personTwentyId,
           text: `AI Automation: Score ${score}/100 (${Object.entries(factors)
             .map(([k, v]) => `${k}: ${v}`)
@@ -100,7 +98,7 @@ export class EnrichAndScoreProcessor extends WorkerHost {
 
       if (shouldCreateOpp) {
         try {
-          const opp = await this.twenty.createOpportunity(apiKey, {
+          const opp = await this.twenty.createOpportunity(tenantId, {
             personId: personTwentyId,
             name: `${person.firstName || 'Lead'} - Auto-qualified`,
             stage: 'prospect',
