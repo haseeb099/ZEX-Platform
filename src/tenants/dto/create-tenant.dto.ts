@@ -3,9 +3,10 @@ import { IsNotEmpty, IsOptional, IsString, IsUrl, ValidateIf } from 'class-valid
 /**
  * Create tenant + Twenty connection.
  *
- * Preferred fields: workspaceId, baseUrl, graphqlUrl, restUrl, apiKey.
+ * Preferred fields: workspaceId, baseUrl, graphqlUrl, restUrl, apiKey, webhookSecret.
  * Legacy aliases twentyWorkspaceId / twentyApiKey remain for transitional clients.
  * baseUrl / graphqlUrl / restUrl are required — endpoints are never inferred.
+ * webhookSecret is required and never returned from API responses.
  */
 export class CreateTenantDto {
   @IsString()
@@ -45,10 +46,13 @@ export class CreateTenantDto {
   @IsNotEmpty()
   twentyApiKey?: string;
 
-  /** Optional; generated when omitted. Returned once in create response only. */
-  @IsOptional()
+  /**
+   * Explicit Twenty webhook signing secret (must match the secret configured in Twenty).
+   * Encrypted immediately; never returned from API responses; never logged.
+   */
   @IsString()
-  webhookSecret?: string;
+  @IsNotEmpty()
+  webhookSecret!: string;
 
   @IsOptional()
   @IsString()

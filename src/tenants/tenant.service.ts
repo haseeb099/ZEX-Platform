@@ -63,11 +63,11 @@ export class TenantService {
   async createTenant(input: CreateTenantDto) {
     const slugBase = this.slugify(input.name) || 'tenant';
     const slug = `${slugBase}-${randomBytes(3).toString('hex')}`;
-    const webhookSecretPlain = input.webhookSecret || `whsec_${randomBytes(24).toString('hex')}`;
     const connectionInput = this.resolveConnectionInput(input);
 
+    // webhookSecret is required input; encrypt immediately; never return or log plaintext.
     const encryptedApiKey = this.crypto.encrypt(connectionInput.apiKeyPlain);
-    const encryptedWebhookSecret = this.crypto.encrypt(webhookSecretPlain);
+    const encryptedWebhookSecret = this.crypto.encrypt(input.webhookSecret);
 
     const tenant = await this.prisma.tenant.create({
       data: {
@@ -117,12 +117,11 @@ export class TenantService {
     const base =
       input.publicBaseUrl || `http://localhost:${this.config.get<number>('PORT') || 3000}`;
 
-    // Plaintext webhook secret returned once at create time only — never stored responses elsewhere.
+    // Non-sensitive provisioning only — never return API keys or webhook secrets.
     return {
       tenantId: tenant.id,
       slug: tenant.slug,
       webhookUrl: `${base}/webhooks/twenty/${tenant.id}`,
-      webhookSecret: webhookSecretPlain,
     };
   }
 
