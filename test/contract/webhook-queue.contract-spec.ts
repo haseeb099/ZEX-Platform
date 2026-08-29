@@ -19,6 +19,7 @@ import {
   deleteTenantCascade,
   seedTenantWithTwentyConnection,
   signTwentyWebhook,
+  countEnrichJobsForPerson,
 } from './helpers';
 
 /**
@@ -161,7 +162,9 @@ describe('CRM contract: webhook → queue boundary', () => {
       take: 1,
     });
     expect(logs).toHaveLength(1);
-    expect(logs[0].status).toBe('queued');
+    // Queue-boundary suite does not register EnrichAndScoreProcessor; status stays
+    // queued unless another worker is sharing Redis. Accept early processing states.
+    expect(['queued', 'processing', 'success']).toContain(logs[0].status);
     expect(logs[0].jobId).toBeTruthy();
 
     const job = await queue.getJob(logs[0].jobId!);
@@ -202,12 +205,14 @@ describe('CRM contract: webhook → queue boundary', () => {
     expect(serialized).toContain('WEBHOOK_SIGNATURE_MISMATCH');
   });
 
-  it('marks duplicate/replay webhook ids without enqueueing a second job', async () => {
+  it('marks duplicate/replay webhook ids without creating a second WebhookLog or BullMQ job', async () => {
     const payload = buildPayload('person_wh_dup');
     const rawBody = JSON.stringify(payload);
     const timestamp = Date.now().toString();
     const signature = signTwentyWebhook(rawBody, webhookSecret, timestamp);
     const eventId = `contract-event-dup-${Date.now()}`;
+
+    const jobsBefore = await countEnrichJobsForPerson(queue, tenantId, 'person_wh_dup');
 
     const first = await app.inject({
       method: 'POST',
@@ -224,6 +229,15 @@ describe('CRM contract: webhook → queue boundary', () => {
     expect(first.json()).toEqual({ received: true, webhookId: eventId });
 
     const beforeCount = await prisma.webhookLog.count({ where: { tenantId } });
+    const jobsAfterFirst = await countEnrichJobsForPerson(queue, tenantId, 'person_wh_dup');
+    expect(jobsAfterFirst).toBe(jobsBefore + 1);
+
+    const firstLog = await prisma.webhookLog.findFirstOrThrow({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const firstJobId = firstLog.jobId;
+    expect(firstJobId).toBeTruthy();
 
     const second = await app.inject({
       method: 'POST',
@@ -242,5 +256,13 @@ describe('CRM contract: webhook → queue boundary', () => {
 
     const afterCount = await prisma.webhookLog.count({ where: { tenantId } });
     expect(afterCount).toBe(beforeCount);
+
+    const jobsAfterDup = await countEnrichJobsForPerson(queue, tenantId, 'person_wh_dup');
+    expect(jobsAfterDup).toBe(jobsAfterFirst);
+
+    const stillFirstLog = await prisma.webhookLog.findUniqueOrThrow({
+      where: { id: firstLog.id },
+    });
+    expect(stillFirstLog.jobId).toBe(firstJobId);
   });
 });

@@ -9,52 +9,79 @@ They are **not** a substitute for a later staging run against a pinned real ZEX-
 ```bash
 # Requires Postgres + Redis (docker compose or CI services) and applied migrations
 npx prisma migrate deploy
-npm run test:contract -- --runInBand
+npm run test:contract
 ```
 
 Related suites:
 
-| Suite | Command | Intent |
-|-------|---------|--------|
-| Unit | `npm test` | Isolated logic (crypto, scoring, mocked collaborators) |
-| E2E-lite | `npm run test:e2e` | Lightweight HMAC payload contract only — **not** full CRM integration |
-| Contract | `npm run test:contract` | Local fake Twenty GraphQL + Prisma + webhook → queue |
+| Suite    | Command                 | Intent                                                                |
+| -------- | ----------------------- | --------------------------------------------------------------------- |
+| Unit     | `npm test`              | Isolated logic (crypto, scoring, mocked collaborators)                |
+| E2E-lite | `npm run test:e2e`      | Lightweight HMAC payload contract only — **not** full CRM integration |
+| Contract | `npm run test:contract` | Fake Twenty GraphQL + Prisma + webhook → queue → worker write-back    |
 
 ## What is covered today
 
 1. **CRM read contract** — `TwentyClient.getPerson(tenantId, id)` issues HTTP GraphQL to the tenant’s stored `graphqlUrl` with the decrypted bearer token from `TwentyConnection` (not injected plaintext into the client).
 2. **CRM write contract** — `TwentyClient.updatePerson(...)` hits the same tenant endpoint with expected mutation variables and interprets the response.
-3. **Tenant isolation** — two tenants with different workspace IDs, GraphQL ports/URLs, and API keys; Tenant A never uses Tenant B’s Authorization header or endpoint.
+3. **Tenant isolation (client)** — two tenants with different workspace IDs, GraphQL ports/URLs, and API keys; Tenant A never uses Tenant B’s Authorization header or endpoint.
 4. **Webhook → queue boundary** — signed Twenty-style webhook against the real Fastify controller path:
    - tenant-specific webhook secret validates
    - wrong secret → 401 fail-closed
    - valid event → `WebhookLog` + BullMQ `enrich-and-score-person` job
-   - duplicate nonce → `{ duplicate: true }` without a second log/job
+   - duplicate nonce → `{ duplicate: true }` with **no second WebhookLog and no second BullMQ job** (job-count assertion)
+5. **Webhook → worker → CRM write-back** (`worker-writeback.contract-spec.ts`):
+
+```text
+signed Twenty webhook
+→ WebhookLog
+→ BullMQ enrich-and-score job
+→ real EnrichAndScoreProcessor
+→ controlled EnrichmentService + real ScoringService
+→ unmocked TwentyClient
+→ localhost fake Twenty GraphQL
+→ ScoreHistory + AuditLog + WebhookLog success
+```
+
+Observed CRM operations (success path):
+
+- `GetPerson`
+- `UpdatePerson` (deterministic enrichment fields)
+- `CreateNote`
+- `CreateOpportunity` (score ≥ tenant threshold)
+
+Also covered:
+
+- **Worker tenant isolation** — Tenant A processing never hits Tenant B’s fake server/key (and the reverse).
+- **Failure path** — controlled enrichment throws BullMQ `UnrecoverableError` → job `failed`, `WebhookLog.status=failed`, no success audit, no CRM write mutations. Uses `UnrecoverableError` so CI does not wait through production’s 5× exponential backoff; production retry/backoff options on the webhook-enqueued job are unchanged.
+- **Write-error policy (documented)** — GraphQL errors on `UpdatePerson` are currently non-fatal in `EnrichAndScoreProcessor` (warn + continue); job still reaches `success`. This asserts actual production behavior, not a forced fail.
 
 ## What is real
 
-- Prisma / Postgres (`Tenant`, `TwentyConnection`, encrypted secrets)
+- Prisma / Postgres (`Tenant`, `TwentyConnection`, encrypted secrets, `WebhookLog`, `ScoreHistory`, `AuditLog`)
 - `CryptoService` encrypt/decrypt
 - `TwentyConnectionService` resolution
 - `TwentyClient` (unmocked) over real HTTP to localhost
 - Nest webhook controller + signature + idempotency (Redis)
-- BullMQ enqueue
+- BullMQ enqueue **and** real `EnrichAndScoreProcessor` worker consumption
+- `ScoringService` / `ScoringEngine` with tenant rules from Postgres
+- `AuditService`
 
-## What is mocked / faked
+## What is mocked / faked / overridden
 
-- **Fake localhost Twenty GraphQL HTTP server** (`test/contract/fake-twenty-server.ts`) — deterministic Twenty-shaped responses; captures Authorization and operation payloads
-- No Clearbit / Apollo / Hunter / production Twenty
-- No internet access required
+- **Fake localhost Twenty GraphQL HTTP server** (`test/contract/fake-twenty-server.ts`) — deterministic Twenty-shaped responses; captures Authorization, operation, variables, and order
+- **`EnrichmentService` Nest override** — deterministic enrichment payload (no Clearbit / Apollo / Hunter)
+- No production Twenty and no internet SaaS credentials required
 
 ## What this does NOT yet prove
 
-- Full worker pipeline: webhook → enrich/score processor → CRM write-back mutation observed end-to-end on the fake server
-- Live schema compatibility with a pinned ZEX-CRM/Twenty version
-- Multi-region / self-hosted auth edge cases beyond bearer API keys
-- Admin tenant provisioning HTTP API E2E
+- Live GraphQL schema compatibility with a pinned ZEX-CRM/Twenty upstream version
+- Real Twenty migrations / ZEX App integration
+- Staging networking and auth configuration against a real pinned CRM instance
+- That CRM write GraphQL failures fail the job (they currently do not — by design in the processor)
 
 Those remain follow-ups (staging against pinned ZEX-CRM recommended).
 
 ## CI
 
-GitHub Actions runs `npm run test:contract -- --runInBand` after `prisma migrate deploy` against the workflow Postgres and Redis services.
+GitHub Actions runs `npx prisma migrate deploy` then `npm run test:contract` against workflow Postgres and Redis services.

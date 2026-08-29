@@ -7,11 +7,17 @@ export type FakeGraphqlBody = {
   operationName?: string;
 };
 
+export type GraphqlOperationName =
+  'GetPerson' | 'UpdatePerson' | 'CreateNote' | 'CreateOpportunity' | 'Unknown';
+
 export type CapturedGraphqlRequest = {
   method: string;
   url: string;
   authorization: string | undefined;
   body: FakeGraphqlBody;
+  operation: GraphqlOperationName;
+  receivedAt: number;
+  order: number;
 };
 
 export type FakePerson = {
@@ -25,6 +31,20 @@ export type FakePerson = {
   company?: { id: string; name?: string; website?: string } | null;
 };
 
+export function classifyGraphqlOperation(query: string): GraphqlOperationName {
+  if (query.includes('query GetPerson') || /\bperson\s*\(/.test(query)) return 'GetPerson';
+  if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
+    return 'UpdatePerson';
+  }
+  if (query.includes('createOpportunity')) return 'CreateOpportunity';
+  if (query.includes('createNote')) return 'CreateNote';
+  return 'Unknown';
+}
+
+async function sleep(ms: number) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
  * Minimal localhost GraphQL stand-in for Twenty CRM contract tests.
  * Captures Authorization + operation payloads for assertions.
@@ -33,17 +53,64 @@ export class FakeTwentyGraphqlServer {
   private server: http.Server | null = null;
   private readonly requests: CapturedGraphqlRequest[] = [];
   private persons = new Map<string, FakePerson>();
+  private failOperations = new Set<GraphqlOperationName>();
+  private requestOrder = 0;
 
   seedPerson(person: FakePerson) {
     this.persons.set(person.id, { ...person });
+  }
+
+  /** Cause the next matching operation(s) to return a GraphQL error until cleared. */
+  failOperation(operation: GraphqlOperationName) {
+    this.failOperations.add(operation);
+  }
+
+  clearFailedOperations() {
+    this.failOperations.clear();
   }
 
   getRequests(): CapturedGraphqlRequest[] {
     return [...this.requests];
   }
 
+  getRequestsByOperation(operation: GraphqlOperationName): CapturedGraphqlRequest[] {
+    return this.requests.filter(r => r.operation === operation);
+  }
+
   clearRequests() {
     this.requests.length = 0;
+    this.requestOrder = 0;
+  }
+
+  async waitForRequest(
+    predicate: (request: CapturedGraphqlRequest) => boolean,
+    options: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
+  ): Promise<CapturedGraphqlRequest> {
+    const timeoutMs = options.timeoutMs ?? 15000;
+    const intervalMs = options.intervalMs ?? 25;
+    const started = Date.now();
+
+    while (Date.now() - started < timeoutMs) {
+      const match = this.requests.find(predicate);
+      if (match) return match;
+      await sleep(intervalMs);
+    }
+
+    throw new Error(
+      `Timeout waiting for GraphQL request (${options.label || 'predicate'}); saw ${this.requests.length} request(s): ${this.requests.map(r => r.operation).join(', ') || 'none'}`,
+    );
+  }
+
+  async waitForOperation(
+    operation: GraphqlOperationName,
+    options: { timeoutMs?: number; minCount?: number } = {},
+  ): Promise<CapturedGraphqlRequest[]> {
+    const minCount = options.minCount ?? 1;
+    await this.waitForRequest(() => this.getRequestsByOperation(operation).length >= minCount, {
+      timeoutMs: options.timeoutMs,
+      label: `${operation} x${minCount}`,
+    });
+    return this.getRequestsByOperation(operation);
   }
 
   async start(): Promise<{ baseUrl: string; graphqlUrl: string; restUrl: string; port: number }> {
@@ -66,15 +133,20 @@ export class FakeTwentyGraphqlServer {
         }
 
         const authorization = req.headers.authorization;
+        const operation = classifyGraphqlOperation(body.query || '');
+        this.requestOrder += 1;
         this.requests.push({
           method: req.method || 'GET',
           url: req.url || '/',
           authorization: typeof authorization === 'string' ? authorization : undefined,
           body,
+          operation,
+          receivedAt: Date.now(),
+          order: this.requestOrder,
         });
 
         if (req.method === 'POST' && (req.url === '/graphql' || req.url?.startsWith('/graphql'))) {
-          const payload = this.handleGraphql(body);
+          const payload = this.handleGraphql(body, operation);
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify(payload));
           return;
@@ -109,11 +181,18 @@ export class FakeTwentyGraphqlServer {
     });
   }
 
-  private handleGraphql(body: FakeGraphqlBody): { data?: unknown; errors?: { message: string }[] } {
+  private handleGraphql(
+    body: FakeGraphqlBody,
+    operation: GraphqlOperationName,
+  ): { data?: unknown; errors?: { message: string }[] } {
+    if (this.failOperations.has(operation)) {
+      return { errors: [{ message: `contract forced failure: ${operation}` }] };
+    }
+
     const query = body.query || '';
     const variables = (body.variables || {}) as Record<string, unknown>;
 
-    if (query.includes('query GetPerson') || /\bperson\s*\(/.test(query)) {
+    if (operation === 'GetPerson') {
       const id = String(variables.id || '');
       const person = this.persons.get(id);
       if (!person) {
@@ -122,7 +201,7 @@ export class FakeTwentyGraphqlServer {
       return { data: { person } };
     }
 
-    if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
+    if (operation === 'UpdatePerson') {
       const id = String(variables.id || '');
       const input = (variables.input || {}) as Record<string, unknown>;
       const existing = this.persons.get(id) || { id };
@@ -148,7 +227,7 @@ export class FakeTwentyGraphqlServer {
       };
     }
 
-    if (query.includes('createOpportunity')) {
+    if (operation === 'CreateOpportunity') {
       return {
         data: {
           createOpportunity: {
@@ -160,7 +239,7 @@ export class FakeTwentyGraphqlServer {
       };
     }
 
-    if (query.includes('createNote')) {
+    if (operation === 'CreateNote') {
       return {
         data: {
           createNote: {
