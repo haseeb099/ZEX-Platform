@@ -1,7 +1,7 @@
 {
-  "name": "twenty-automation-backend",
+  "name": "zex-platform",
   "version": "0.1.0",
-  "description": "AI automation backend for Twenty CRM (ZEX Connect MVP)",
+  "description": "Proprietary ZEX revenue intelligence, automation and agent platform",
   "license": "MIT",
   "scripts": {
     "prebuild": "rimraf dist",
