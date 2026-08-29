@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { CryptoService } from '@src/common/crypto.service';
@@ -31,18 +31,52 @@ export class TenantService {
       .slice(0, 48);
   }
 
+  /**
+   * Transitional field adapter: prefer new connection field names, fall back to legacy DTO aliases.
+   */
+  private resolveConnectionInput(input: CreateTenantDto) {
+    const workspaceId = input.workspaceId || input.twentyWorkspaceId;
+    const apiKeyPlain = input.apiKey || input.twentyApiKey;
+
+    if (!workspaceId || !apiKeyPlain) {
+      throw new BadRequestException(
+        'workspaceId (or twentyWorkspaceId) and apiKey (or twentyApiKey) are required',
+      );
+    }
+
+    if (!input.baseUrl || !input.graphqlUrl || !input.restUrl) {
+      throw new BadRequestException(
+        'baseUrl, graphqlUrl, and restUrl are required — Twenty endpoints are never inferred from workspace id or global env',
+      );
+    }
+
+    return {
+      workspaceId,
+      apiKeyPlain,
+      baseUrl: input.baseUrl,
+      graphqlUrl: input.graphqlUrl,
+      restUrl: input.restUrl,
+      twentyVersion: input.twentyVersion ?? null,
+    };
+  }
+
   async createTenant(input: CreateTenantDto) {
     const slugBase = this.slugify(input.name) || 'tenant';
     const slug = `${slugBase}-${randomBytes(3).toString('hex')}`;
-    const webhookSecretPlain = `whsec_${randomBytes(24).toString('hex')}`;
+    const connectionInput = this.resolveConnectionInput(input);
+
+    // webhookSecret is required input; encrypt immediately; never return or log plaintext.
+    const encryptedApiKey = this.crypto.encrypt(connectionInput.apiKeyPlain);
+    const encryptedWebhookSecret = this.crypto.encrypt(input.webhookSecret);
 
     const tenant = await this.prisma.tenant.create({
       data: {
         name: input.name,
         slug,
-        twentyWorkspaceId: input.twentyWorkspaceId,
-        twentyApiKey: this.crypto.encrypt(input.twentyApiKey),
-        twentyWebhookSecret: this.crypto.encrypt(webhookSecretPlain),
+        // Legacy Tenant columns kept in sync for staged migration (do not remove yet).
+        twentyWorkspaceId: connectionInput.workspaceId,
+        twentyApiKey: encryptedApiKey,
+        twentyWebhookSecret: encryptedWebhookSecret,
         scoringRules: {
           create: {
             name: 'Default Scoring',
@@ -51,7 +85,20 @@ export class TenantService {
             rules: DEFAULT_SCORING_RULES,
           },
         },
+        twentyConnection: {
+          create: {
+            workspaceId: connectionInput.workspaceId,
+            baseUrl: connectionInput.baseUrl,
+            graphqlUrl: connectionInput.graphqlUrl,
+            restUrl: connectionInput.restUrl,
+            apiKey: encryptedApiKey,
+            webhookSecret: encryptedWebhookSecret,
+            twentyVersion: connectionInput.twentyVersion,
+            status: 'active',
+          },
+        },
       },
+      include: { twentyConnection: true },
     });
 
     if (input.clearbitApiKey) {
@@ -70,11 +117,11 @@ export class TenantService {
     const base =
       input.publicBaseUrl || `http://localhost:${this.config.get<number>('PORT') || 3000}`;
 
+    // Non-sensitive provisioning only — never return API keys or webhook secrets.
     return {
       tenantId: tenant.id,
       slug: tenant.slug,
       webhookUrl: `${base}/webhooks/twenty/${tenant.id}`,
-      webhookSecret: webhookSecretPlain,
     };
   }
 
@@ -89,9 +136,11 @@ export class TenantService {
   async getTenantSafe(tenantId: string) {
     const tenant = await this.prisma.tenant.findFirst({
       where: { id: tenantId, deletedAt: null },
-      include: { scoringRules: true },
+      include: { scoringRules: true, twentyConnection: true },
     });
     if (!tenant) return null;
+
+    const connection = tenant.twentyConnection;
 
     return {
       tenantId: tenant.id,
@@ -99,7 +148,19 @@ export class TenantService {
       slug: tenant.slug,
       plan: tenant.plan,
       status: tenant.status,
-      twentyWorkspaceId: tenant.twentyWorkspaceId,
+      /** @deprecated Prefer twentyConnection.workspaceId */
+      twentyWorkspaceId: connection?.workspaceId ?? tenant.twentyWorkspaceId,
+      twentyConnection: connection
+        ? {
+            workspaceId: connection.workspaceId,
+            baseUrl: connection.baseUrl,
+            graphqlUrl: connection.graphqlUrl,
+            restUrl: connection.restUrl,
+            twentyVersion: connection.twentyVersion,
+            status: connection.status,
+            lastVerifiedAt: connection.lastVerifiedAt,
+          }
+        : null,
       settings: {
         autoOpportunity: {
           enabled: tenant.enableAutoOpportunity,

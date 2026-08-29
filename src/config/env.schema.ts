@@ -13,7 +13,11 @@ export const envSchema = Joi.object({
     .pattern(/^[0-9a-fA-F]{64}$/)
     .required(),
   JWT_SECRET: Joi.string().min(32).required(),
-  TWENTY_GRAPHQL_URL: Joi.string().uri().default('https://api.twenty.com/graphql'),
+  /**
+   * @deprecated Not used for tenant CRM calls. Per-tenant TwentyConnection.graphqlUrl is authoritative.
+   * Kept optional for local bootstrap / transitional tooling only.
+   */
+  TWENTY_GRAPHQL_URL: Joi.string().uri().optional(),
   CLEARBIT_API_KEY: Joi.string().allow('').optional(),
   APOLLO_API_KEY: Joi.string().allow('').optional(),
   HUNTER_API_KEY: Joi.string().allow('').optional(),

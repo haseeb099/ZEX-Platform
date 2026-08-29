@@ -11,8 +11,11 @@ model Tenant {
   id                   String    @id @default(cuid())
   name                 String
   slug                 String    @unique
+  /// @deprecated Prefer TwentyConnection.workspaceId — kept for staged migration.
   twentyWorkspaceId    String
+  /// @deprecated Prefer TwentyConnection.apiKey — kept for staged migration.
   twentyApiKey         String    @db.Text
+  /// @deprecated Prefer TwentyConnection.webhookSecret — kept for staged migration.
   twentyWebhookSecret  String
   scoringRules         ScoringRule[]
   enableAutoOpportunity Boolean  @default(true)
@@ -29,10 +32,33 @@ model Tenant {
   webhookLogs          WebhookLog[]
   auditLogs            AuditLog[]
   scoreHistory         ScoreHistory[]
+  twentyConnection     TwentyConnection?
 
   @@index([slug])
   @@index([status])
   @@index([deletedAt])
+}
+
+/// Per-tenant Twenty CRM deployment connection (1:1 with Tenant for v1).
+/// ZEX-Platform owns connection config; Twenty/ZEX-CRM owns operational CRM truth.
+model TwentyConnection {
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspaceId     String
+  baseUrl         String
+  graphqlUrl      String
+  restUrl         String
+  apiKey          String    @db.Text
+  webhookSecret   String    @db.Text
+  twentyVersion   String?
+  status          String    @default("active")
+  lastVerifiedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([status])
 }
 
 model ScoringRule {
