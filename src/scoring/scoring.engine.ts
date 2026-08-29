@@ -92,7 +92,8 @@ export class ScoringEngine {
         const daysOld = Math.floor(
           (Date.now() - new Date(person.updatedAt).getTime()) / (1000 * 60 * 60 * 24),
         );
-        factors.activityRecency = daysOld <= threshold ? weight : daysOld <= 30 ? Math.floor(weight * 0.66) : 0;
+        factors.activityRecency =
+          daysOld <= threshold ? weight : daysOld <= 30 ? Math.floor(weight * 0.66) : 0;
       } else {
         factors.activityRecency = Math.floor(weight * 0.5);
       }

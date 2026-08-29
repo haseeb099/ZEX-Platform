@@ -25,9 +25,7 @@ describe('SignatureService', () => {
     const payload = JSON.stringify({ eventName: 'person.created', record: { id: 'p1' } });
     const secret = 'whsec_test_secret';
     const stringToSign = `${timestamp}:${payload}`;
-    const signature = createHmac('sha256', secret)
-      .update(stringToSign, 'utf8')
-      .digest('hex');
+    const signature = createHmac('sha256', secret).update(stringToSign, 'utf8').digest('hex');
 
     expect(service.verifyTwentyWebhook(payload, signature, secret, timestamp)).toBe(true);
   });

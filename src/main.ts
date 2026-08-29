@@ -19,19 +19,15 @@ async function bootstrap() {
   // Replace JSON parser so webhook HMAC can use the exact raw body
   const instance = app.getHttpAdapter().getInstance();
   instance.removeContentTypeParser('application/json');
-  instance.addContentTypeParser(
-    'application/json',
-    { parseAs: 'buffer' },
-    (req, body, done) => {
-      try {
-        const raw = Buffer.isBuffer(body) ? body.toString('utf8') : String(body ?? '');
-        (req as { rawBody?: string }).rawBody = raw;
-        done(null, raw.length ? JSON.parse(raw) : {});
-      } catch (err) {
-        done(err as Error, undefined);
-      }
-    },
-  );
+  instance.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    try {
+      const raw = Buffer.isBuffer(body) ? body.toString('utf8') : String(body ?? '');
+      (req as { rawBody?: string }).rawBody = raw;
+      done(null, raw.length ? JSON.parse(raw) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
 
   setupSwagger(app);
 
