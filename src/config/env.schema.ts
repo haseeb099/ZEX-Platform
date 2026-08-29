@@ -9,7 +9,9 @@ export const envSchema = Joi.object({
   DATABASE_URL: Joi.string().required(),
   DATABASE_LOGGING: Joi.boolean().truthy('true').falsy('false').default(false),
   REDIS_URL: Joi.string().required(),
-  MASTER_KEY: Joi.string().pattern(/^[0-9a-fA-F]{64}$/).required(),
+  MASTER_KEY: Joi.string()
+    .pattern(/^[0-9a-fA-F]{64}$/)
+    .required(),
   JWT_SECRET: Joi.string().min(32).required(),
   TWENTY_GRAPHQL_URL: Joi.string().uri().default('https://api.twenty.com/graphql'),
   CLEARBIT_API_KEY: Joi.string().allow('').optional(),
