@@ -32,9 +32,7 @@ export function toPinnedPersonResponse(person: FakePerson) {
       ? {
           id: person.company.id,
           name: person.company.name ?? null,
-          domainName: person.company.website
-            ? { primaryLinkUrl: person.company.website }
-            : null,
+          domainName: person.company.website ? { primaryLinkUrl: person.company.website } : null,
         }
       : null,
   };

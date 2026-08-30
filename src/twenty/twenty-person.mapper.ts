@@ -2,9 +2,7 @@ import { TwentyPerson } from './twenty.types';
 
 type TwentyNameShape = { firstName?: string | null; lastName?: string | null } | null | undefined;
 type TwentyEmailsShape =
-  | { primaryEmail?: string | null; additionalEmails?: string[] | null }
-  | null
-  | undefined;
+  { primaryEmail?: string | null; additionalEmails?: string[] | null } | null | undefined;
 type TwentyCompanyShape =
   | {
       id?: string;
@@ -16,7 +14,9 @@ type TwentyCompanyShape =
   | undefined;
 
 /** Map pinned Twenty workspace GraphQL person record → platform TwentyPerson. */
-export function mapTwentyPersonRecord(raw: Record<string, unknown> | null | undefined): TwentyPerson {
+export function mapTwentyPersonRecord(
+  raw: Record<string, unknown> | null | undefined,
+): TwentyPerson {
   if (!raw || typeof raw.id !== 'string') {
     throw new Error('Invalid Twenty person record: missing id');
   }
