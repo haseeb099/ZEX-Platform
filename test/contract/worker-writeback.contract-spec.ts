@@ -294,17 +294,16 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     const getPerson = await serverA.waitForOperation('GetPerson', { timeoutMs: 5000 });
     expect(getPerson[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(getPerson[0].url).toBe('/graphql');
-    expect(getPerson[0].body.variables).toEqual({ id: personId });
+    expect(getPerson[0].body.variables).toEqual({ filter: { id: { eq: personId } } });
 
     const updates = serverA.getRequestsByOperation('UpdatePerson');
     expect(updates).toHaveLength(1);
     expect(updates[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(updates[0].body.variables).toEqual({
-      id: personId,
-      input: {
+      personId,
+      data: {
         jobTitle: 'VP Engineering',
-        company: 'Acme',
-        location: 'London',
+        companyId: 'co_acme',
       },
     });
 
@@ -313,21 +312,25 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     expect(notes[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(JSON.stringify(notes[0].body.variables)).toContain('AI Automation: Score');
 
+    const noteTargets = serverA.getRequestsByOperation('CreateNoteTarget');
+    expect(noteTargets).toHaveLength(1);
+
     const opps = serverA.getRequestsByOperation('CreateOpportunity');
     expect(opps).toHaveLength(1);
     expect(opps[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(opps[0].body.variables).toMatchObject({
-      input: {
-        personId,
+      data: {
+        pointOfContactId: personId,
         name: 'Ada - Auto-qualified',
-        stage: 'prospect',
+        stage: 'NEW',
       },
     });
 
     // Operation order: read before writes.
     expect(getPerson[0].order).toBeLessThan(updates[0].order);
     expect(updates[0].order).toBeLessThan(notes[0].order);
-    expect(notes[0].order).toBeLessThan(opps[0].order);
+    expect(notes[0].order).toBeLessThan(noteTargets[0].order);
+    expect(noteTargets[0].order).toBeLessThan(opps[0].order);
 
     const history = await prisma.scoreHistory.findFirst({
       where: { tenantId: tenantAId, personTwentyId: personId },

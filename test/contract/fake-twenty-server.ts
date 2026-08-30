@@ -8,7 +8,50 @@ export type FakeGraphqlBody = {
 };
 
 export type GraphqlOperationName =
-  'GetPerson' | 'UpdatePerson' | 'CreateNote' | 'CreateOpportunity' | 'Unknown';
+  | 'GetPerson'
+  | 'UpdatePerson'
+  | 'CreateNote'
+  | 'CreateNoteTarget'
+  | 'CreateOpportunity'
+  | 'Unknown';
+
+export function toPinnedPersonResponse(person: FakePerson) {
+  return {
+    id: person.id,
+    name: {
+      firstName: person.firstName ?? null,
+      lastName: person.lastName ?? null,
+    },
+    emails: {
+      primaryEmail: person.email ?? null,
+    },
+    jobTitle: person.jobTitle ?? null,
+    createdAt: person.createdAt,
+    updatedAt: person.updatedAt,
+    company: person.company
+      ? {
+          id: person.company.id,
+          name: person.company.name ?? null,
+          domainName: person.company.website
+            ? { primaryLinkUrl: person.company.website }
+            : null,
+        }
+      : null,
+  };
+}
+
+export function classifyGraphqlOperation(query: string): GraphqlOperationName {
+  if (query.includes('query GetPerson') || /\bperson\s*\(\s*filter/.test(query)) {
+    return 'GetPerson';
+  }
+  if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
+    return 'UpdatePerson';
+  }
+  if (query.includes('createNoteTarget')) return 'CreateNoteTarget';
+  if (query.includes('createNote')) return 'CreateNote';
+  if (query.includes('createOpportunity')) return 'CreateOpportunity';
+  return 'Unknown';
+}
 
 export type CapturedGraphqlRequest = {
   method: string;
@@ -30,16 +73,6 @@ export type FakePerson = {
   updatedAt?: string;
   company?: { id: string; name?: string; website?: string } | null;
 };
-
-export function classifyGraphqlOperation(query: string): GraphqlOperationName {
-  if (query.includes('query GetPerson') || /\bperson\s*\(/.test(query)) return 'GetPerson';
-  if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
-    return 'UpdatePerson';
-  }
-  if (query.includes('createOpportunity')) return 'CreateOpportunity';
-  if (query.includes('createNote')) return 'CreateNote';
-  return 'Unknown';
-}
 
 async function sleep(ms: number) {
   await new Promise(resolve => setTimeout(resolve, ms));
@@ -219,17 +252,18 @@ export class FakeTwentyGraphqlServer {
     const variables = (body.variables || {}) as Record<string, unknown>;
 
     if (operation === 'GetPerson') {
-      const id = String(variables.id || '');
+      const filter = (variables.filter || {}) as { id?: { eq?: string } };
+      const id = String(filter.id?.eq || variables.id || '');
       const person = this.persons.get(id);
       if (!person) {
         return { errors: [{ message: `Person ${id} not found` }] };
       }
-      return { data: { person } };
+      return { data: { person: toPinnedPersonResponse(person) } };
     }
 
     if (operation === 'UpdatePerson') {
-      const id = String(variables.id || '');
-      const input = (variables.input || {}) as Record<string, unknown>;
+      const id = String(variables.personId || variables.id || '');
+      const input = (variables.data || variables.input || {}) as Record<string, unknown>;
       const existing = this.persons.get(id) || { id };
       const updated: FakePerson = {
         ...existing,
@@ -242,25 +276,20 @@ export class FakeTwentyGraphqlServer {
       this.persons.set(id, updated);
       return {
         data: {
-          updatePerson: {
-            id: updated.id,
-            firstName: updated.firstName ?? null,
-            lastName: updated.lastName ?? null,
-            email: updated.email ?? null,
-            jobTitle: updated.jobTitle ?? null,
-          },
+          updatePerson: toPinnedPersonResponse(updated),
         },
       };
     }
 
     if (operation === 'CreateOpportunity') {
       this.oppCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
       return {
         data: {
           createOpportunity: {
             id: `opp_contract_${this.oppCounter}`,
-            name: String((variables.input as { name?: string })?.name || 'Opportunity'),
-            stage: 'prospect',
+            name: String(data.name || 'Opportunity'),
+            stage: String(data.stage || 'NEW'),
           },
         },
       };
@@ -272,8 +301,16 @@ export class FakeTwentyGraphqlServer {
         data: {
           createNote: {
             id: `note_contract_${this.noteCounter}`,
-            text: 'ok',
-            createdAt: new Date().toISOString(),
+          },
+        },
+      };
+    }
+
+    if (operation === 'CreateNoteTarget') {
+      return {
+        data: {
+          createNoteTarget: {
+            id: `note_target_${this.noteCounter}`,
           },
         },
       };

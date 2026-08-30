@@ -44,7 +44,11 @@ describe('TwentyClient', () => {
     });
 
     const mockRequest = jest.fn().mockResolvedValue({
-      person: { id: 'person_1', email: 'a@b.com' },
+      person: {
+        id: 'person_1',
+        name: { firstName: 'Ada', lastName: 'Lovelace' },
+        emails: { primaryEmail: 'a@b.com' },
+      },
     });
     (GraphQLClient as unknown as jest.Mock).mockImplementation(() => ({
       request: mockRequest,

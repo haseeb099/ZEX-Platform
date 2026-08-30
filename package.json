@@ -18,6 +18,7 @@
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:contract": "jest --config ./test/jest-contract.json --runInBand",
+    "test:staging:twenty": "ts-node -r tsconfig-paths/register scripts/staging/pinned-twenty-smoke.ts",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:generate": "prisma generate"

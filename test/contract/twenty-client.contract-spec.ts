@@ -127,14 +127,16 @@ describe('CRM contract: TwentyClient HTTP boundary', () => {
     expect(requests[0].url).toBe('/graphql');
     expect(requests[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(requests[0].body.query).toEqual(expect.stringContaining('GetPerson'));
-    expect(requests[0].body.variables).toEqual({ id: 'person_a1' });
+    expect(requests[0].body.variables).toEqual({
+      filter: { id: { eq: 'person_a1' } },
+    });
     expect(serverB.getRequests()).toHaveLength(0);
   });
 
   it('updatePerson writes to the tenant GraphQL endpoint with expected mutation variables', async () => {
     const updated = await twenty.updatePerson(tenantAId, 'person_a1', {
       jobTitle: 'Chief Engineer',
-      company: 'Analytical Engine',
+      companyId: 'co_a',
     });
 
     expect(updated).toMatchObject({
@@ -147,10 +149,10 @@ describe('CRM contract: TwentyClient HTTP boundary', () => {
     expect(requests[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(requests[0].body.query).toEqual(expect.stringContaining('UpdatePerson'));
     expect(requests[0].body.variables).toEqual({
-      id: 'person_a1',
-      input: {
+      personId: 'person_a1',
+      data: {
         jobTitle: 'Chief Engineer',
-        company: 'Analytical Engine',
+        companyId: 'co_a',
       },
     });
     expect(serverB.getRequests()).toHaveLength(0);

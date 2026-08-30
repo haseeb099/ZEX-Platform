@@ -82,7 +82,7 @@ Also covered:
 
 ## What is mocked / faked / overridden
 
-- **Fake localhost Twenty GraphQL HTTP server** (`test/contract/fake-twenty-server.ts`) — deterministic Twenty-shaped responses; captures Authorization, operation, variables, and order
+- **Fake localhost Twenty GraphQL HTTP server** (`test/contract/fake-twenty-server.ts`) — models **pinned Twenty workspace schema** (`person(filter:)`, `updatePerson(id,data:)`, `createNote` + `createNoteTarget`, `createOpportunity(data:)`)
 - **`EnrichmentService` Nest override** — deterministic enrichment payload (no Clearbit / Apollo / Hunter)
 - No production Twenty and no internet SaaS credentials required
 

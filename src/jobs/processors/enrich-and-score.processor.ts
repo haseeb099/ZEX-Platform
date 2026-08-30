@@ -101,8 +101,7 @@ export class EnrichAndScoreProcessor extends WorkerHost {
       if (!updateDone.completed) {
         await this.twenty.updatePerson(tenantId, personTwentyId, {
           jobTitle: enrichmentData.jobTitle || person.jobTitle || undefined,
-          company: enrichmentData.companyName || undefined,
-          location: enrichmentData.location || undefined,
+          companyId: person.company?.id,
         });
         await this.checkpoints.recordSuccess(
           tenantId,
