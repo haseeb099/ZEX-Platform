@@ -54,7 +54,10 @@ export class FakeTwentyGraphqlServer {
   private readonly requests: CapturedGraphqlRequest[] = [];
   private persons = new Map<string, FakePerson>();
   private failOperations = new Set<GraphqlOperationName>();
+  private failOnceOperations = new Map<GraphqlOperationName, number>();
   private requestOrder = 0;
+  private noteCounter = 0;
+  private oppCounter = 0;
 
   seedPerson(person: FakePerson) {
     this.persons.set(person.id, { ...person });
@@ -65,8 +68,18 @@ export class FakeTwentyGraphqlServer {
     this.failOperations.add(operation);
   }
 
+  /** Fail the next N matching operations, then succeed (for partial-success retry tests). */
+  failOperationTimes(operation: GraphqlOperationName, times = 1) {
+    this.failOnceOperations.set(operation, times);
+  }
+
   clearFailedOperations() {
     this.failOperations.clear();
+    this.failOnceOperations.clear();
+  }
+
+  countOperations(operation: GraphqlOperationName): number {
+    return this.requests.filter(r => r.operation === operation).length;
   }
 
   getRequests(): CapturedGraphqlRequest[] {
@@ -80,6 +93,8 @@ export class FakeTwentyGraphqlServer {
   clearRequests() {
     this.requests.length = 0;
     this.requestOrder = 0;
+    this.noteCounter = 0;
+    this.oppCounter = 0;
   }
 
   async waitForRequest(
@@ -185,6 +200,17 @@ export class FakeTwentyGraphqlServer {
     body: FakeGraphqlBody,
     operation: GraphqlOperationName,
   ): { data?: unknown; errors?: { message: string }[] } {
+    const failOnceRemaining = this.failOnceOperations.get(operation);
+    if (failOnceRemaining !== undefined && failOnceRemaining > 0) {
+      const next = failOnceRemaining - 1;
+      if (next <= 0) {
+        this.failOnceOperations.delete(operation);
+      } else {
+        this.failOnceOperations.set(operation, next);
+      }
+      return { errors: [{ message: `contract forced failure (once): ${operation}` }] };
+    }
+
     if (this.failOperations.has(operation)) {
       return { errors: [{ message: `contract forced failure: ${operation}` }] };
     }
@@ -228,10 +254,11 @@ export class FakeTwentyGraphqlServer {
     }
 
     if (operation === 'CreateOpportunity') {
+      this.oppCounter += 1;
       return {
         data: {
           createOpportunity: {
-            id: 'opp_contract_1',
+            id: `opp_contract_${this.oppCounter}`,
             name: String((variables.input as { name?: string })?.name || 'Opportunity'),
             stage: 'prospect',
           },
@@ -240,10 +267,11 @@ export class FakeTwentyGraphqlServer {
     }
 
     if (operation === 'CreateNote') {
+      this.noteCounter += 1;
       return {
         data: {
           createNote: {
-            id: 'note_contract_1',
+            id: `note_contract_${this.noteCounter}`,
             text: 'ok',
             createdAt: new Date().toISOString(),
           },

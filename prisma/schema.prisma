@@ -185,3 +185,21 @@ model JobResult {
   @@index([tenantId, jobType])
   @@index([status])
 }
+
+/// Persistent CRM write checkpoints for enrich-and-score job retries.
+/// Scoped per tenant + webhookLogId + action — never reused across events or tenants.
+model JobActionCheckpoint {
+  id             String   @id @default(cuid())
+  tenantId       String
+  webhookLogId   String
+  personTwentyId String
+  action         String
+  externalId     String?
+  status         String   @default("completed")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, webhookLogId, action])
+  @@index([tenantId, webhookLogId])
+  @@index([personTwentyId])
+}

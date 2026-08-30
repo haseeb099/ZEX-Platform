@@ -6,6 +6,7 @@ import { ScoringModule } from '../scoring/scoring.module';
 import { TwentyModule } from '../twenty/twenty.module';
 import { JobsAdminController } from './jobs-admin.controller';
 import { ENRICH_AND_SCORE_QUEUE } from './jobs.constants';
+import { JobActionCheckpointService } from './job-action-checkpoint.service';
 import { EnrichAndScoreProcessor } from './processors/enrich-and-score.processor';
 
 @Module({
@@ -17,7 +18,7 @@ import { EnrichAndScoreProcessor } from './processors/enrich-and-score.processor
     AuditModule,
   ],
   controllers: [JobsAdminController],
-  providers: [EnrichAndScoreProcessor],
+  providers: [JobActionCheckpointService, EnrichAndScoreProcessor],
   exports: [BullModule],
 })
 export class JobsModule {}

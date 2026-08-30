@@ -55,6 +55,8 @@ Also covered:
 - **Worker tenant isolation** — Tenant A processing never hits Tenant B’s fake server/key (and the reverse).
 - **Enrichment failure** — controlled enrichment throws BullMQ `UnrecoverableError` → job `failed`, `WebhookLog.status=failed`, no success audit, no CRM write mutations. Uses `UnrecoverableError` so CI does not wait through production’s 5× exponential backoff; production retry/backoff options on the webhook-enqueued job are unchanged when env overrides are unset.
 - **CRM write failure** — fake Twenty fails `UpdatePerson` or `CreateOpportunity` → error propagates → BullMQ job fails → `WebhookLog` failed → **no** `AuditLog.success=true` → **no** `ScoreHistory` / synthetic `pending-twenty-*` opportunity ids → no further mutations after the failed write. Contract tests set `BULLMQ_ENRICH_ATTEMPTS=1` for terminal assertions only; production default remains 5 attempts / 2000ms exponential backoff.
+- **Partial-success retry idempotency** — first attempt succeeds `UpdatePerson` + `CreateNote`, fails `CreateOpportunity`; retry skips committed writes and succeeds opportunity → exactly one note, two opportunity attempts (one fail + one success), checkpoints scoped per `webhookLogId`.
+- **Separate webhook events** — a second webhook for the same person is not suppressed by prior checkpoints.
 
 ## CRM failure semantics (production)
 
@@ -63,13 +65,13 @@ Also covered:
 - When auto-opportunity is required, `CreateOpportunity` failures **propagate**. `opportunityCreated` is true only after Twenty returns a real opportunity id — never a synthetic `pending-twenty-*` id.
 - `AuditLog` with `success: true` is written only after required CRM writes succeed.
 
-### Known follow-up: partial-success retry idempotency
+### Partial-success retry idempotency (production)
 
-If `UpdatePerson` and `CreateNote` succeed but `CreateOpportunity` fails, a BullMQ retry may re-attempt earlier writes. Full write-action idempotency across partial success is an **operational-hardening** follow-up and is not solved in this suite.
+`JobActionCheckpoint` records completed CRM writes per `(tenantId, webhookLogId, action)`. BullMQ retries skip already-checkpointed `UpdatePerson`, `CreateNote`, and `CreateOpportunity` for the same webhook event. See `docs/PLATFORM_SECURITY_HARDENING.md`.
 
 ## What is real
 
-- Prisma / Postgres (`Tenant`, `TwentyConnection`, encrypted secrets, `WebhookLog`, `ScoreHistory`, `AuditLog`)
+- Prisma / Postgres (`Tenant`, `TwentyConnection`, encrypted secrets, `WebhookLog`, `ScoreHistory`, `AuditLog`, `JobActionCheckpoint`)
 - `CryptoService` encrypt/decrypt
 - `TwentyConnectionService` resolution
 - `TwentyClient` (unmocked) over real HTTP to localhost
@@ -89,7 +91,7 @@ If `UpdatePerson` and `CreateNote` succeed but `CreateOpportunity` fails, a Bull
 - Live GraphQL schema compatibility with a pinned ZEX-CRM/Twenty upstream version
 - Real Twenty migrations / ZEX App integration
 - Staging networking and auth configuration against a real pinned CRM instance
-- Idempotent CRM write-actions across partial-success retries
+- Score history dedupe across worker retries (CRM writes are checkpointed)
 
 Those remain follow-ups (staging against pinned ZEX-CRM recommended).
 
