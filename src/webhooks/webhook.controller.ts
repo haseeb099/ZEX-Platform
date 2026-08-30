@@ -111,8 +111,13 @@ export class WebhookController {
         personSnapshot: personRecord || null,
       },
       {
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 2000 },
+        // Production defaults: 5 attempts, 2000ms exponential backoff.
+        // Optional BULLMQ_ENRICH_* env overrides are for contract/ops timing only.
+        attempts: Number(process.env.BULLMQ_ENRICH_ATTEMPTS) || 5,
+        backoff: {
+          type: 'exponential',
+          delay: Number(process.env.BULLMQ_ENRICH_BACKOFF_MS) || 2000,
+        },
         removeOnComplete: { age: 3600 },
         removeOnFail: { age: 86400 },
       },

@@ -11,5 +11,6 @@
     "^@src/(.*)$": "<rootDir>/../src/$1"
   },
   "testTimeout": 60000,
+  "maxWorkers": 1,
   "forceExit": true
 }
