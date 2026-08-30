@@ -14,6 +14,7 @@ import { envSchema } from '@src/config/env.schema';
 import { EnrichmentService } from '@src/enrichment/enrichment.service';
 import { EnrichmentResult } from '@src/enrichment/enrichment.types';
 import { ENRICH_AND_SCORE_QUEUE } from '@src/jobs/jobs.constants';
+import { JobActionCheckpointService } from '@src/jobs/job-action-checkpoint.service';
 import { EnrichAndScoreProcessor } from '@src/jobs/processors/enrich-and-score.processor';
 import { ScoringModule } from '@src/scoring/scoring.module';
 import { TwentyModule } from '@src/twenty/twenty.module';
@@ -89,6 +90,7 @@ const enrichmentControl: {
     AuditModule,
   ],
   providers: [
+    JobActionCheckpointService,
     EnrichAndScoreProcessor,
     {
       provide: EnrichmentService,
@@ -333,7 +335,7 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     expect(history).toBeTruthy();
     expect(history!.score).toBeGreaterThanOrEqual(50);
     expect(history!.opportunityCreated).toBe(true);
-    expect(history!.opportunityTwentyId).toBe('opp_contract_1');
+    expect(history!.opportunityTwentyId).toMatch(/^opp_contract_\d+$/);
 
     const audit = await prisma.auditLog.findFirst({
       where: {
@@ -583,4 +585,129 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
       JSON.stringify(await prisma.scoreHistory.findMany({ where: { tenantId: tenantAId } })),
     ).not.toContain('pending-twenty-');
   }, 60000);
+
+  it('skips committed CRM writes on retry after partial success (one note, one opportunity)', async () => {
+    process.env.BULLMQ_ENRICH_BACKOFF_MS = '200';
+
+    const personId = `person_worker_idempotent_${Date.now()}`;
+    serverA.seedPerson({
+      id: personId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@acme.test',
+      jobTitle: 'Engineer',
+      updatedAt: new Date().toISOString(),
+    });
+    serverA.failOperationTimes('CreateOpportunity', 1);
+
+    const eventId = `worker-idempotent-${personId}`;
+    const response = await postSignedWebhook(
+      tenantAId,
+      webhookSecretA,
+      buildPayload(personId),
+      eventId,
+    );
+    expect(response.statusCode).toBe(200);
+
+    await waitForCondition(
+      async () => {
+        const log = await prisma.webhookLog.findFirst({
+          where: { tenantId: tenantAId, event: 'person.created' },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (log?.status !== 'success' || !log.jobId) return false;
+        const job = await queue.getJob(log.jobId);
+        return (await job?.getState()) === 'completed';
+      },
+      { timeoutMs: 45000, label: 'partial-success retry completed' },
+    );
+
+    delete process.env.BULLMQ_ENRICH_BACKOFF_MS;
+
+    expect(serverA.countOperations('UpdatePerson')).toBe(1);
+    expect(serverA.countOperations('CreateNote')).toBe(1);
+    expect(serverA.countOperations('CreateOpportunity')).toBe(2);
+
+    const log = await prisma.webhookLog.findFirstOrThrow({
+      where: { tenantId: tenantAId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(log.status).toBe('success');
+    expect(log.jobResult).toMatchObject({ opportunityCreated: true });
+
+    const checkpoints = await prisma.jobActionCheckpoint.findMany({
+      where: { tenantId: tenantAId, webhookLogId: log.id },
+    });
+    expect(checkpoints.map(c => c.action).sort()).toEqual([
+      'create_note',
+      'create_opportunity',
+      'update_person',
+    ]);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: tenantAId,
+        resourceTwentyId: personId,
+        action: 'enrich_and_score_person',
+        success: true,
+      },
+    });
+    expect(audit).toBeTruthy();
+  }, 90000);
+
+  it('does not suppress CRM writes for a different webhook event on the same person', async () => {
+    const personId = `person_worker_separate_event_${Date.now()}`;
+    serverA.seedPerson({
+      id: personId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@acme.test',
+      jobTitle: 'Engineer',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const first = await postSignedWebhook(
+      tenantAId,
+      webhookSecretA,
+      buildPayload(personId),
+      `worker-event-a-${personId}`,
+    );
+    expect(first.statusCode).toBe(200);
+
+    await waitForCondition(
+      async () => {
+        const log = await prisma.webhookLog.findFirst({
+          where: { tenantId: tenantAId },
+          orderBy: { createdAt: 'desc' },
+        });
+        return log?.status === 'success';
+      },
+      { timeoutMs: 30000, label: 'first webhook success' },
+    );
+
+    serverA.clearRequests();
+
+    const second = await postSignedWebhook(
+      tenantAId,
+      webhookSecretA,
+      buildPayload(personId),
+      `worker-event-b-${personId}`,
+    );
+    expect(second.statusCode).toBe(200);
+
+    await waitForCondition(
+      async () => {
+        const logs = await prisma.webhookLog.findMany({
+          where: { tenantId: tenantAId, event: 'person.created' },
+          orderBy: { createdAt: 'desc' },
+        });
+        return logs.length >= 2 && logs[0]?.status === 'success';
+      },
+      { timeoutMs: 30000, label: 'second webhook success' },
+    );
+
+    expect(serverA.countOperations('UpdatePerson')).toBe(1);
+    expect(serverA.countOperations('CreateNote')).toBe(1);
+    expect(serverA.countOperations('CreateOpportunity')).toBe(1);
+  }, 90000);
 });

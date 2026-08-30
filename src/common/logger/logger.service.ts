@@ -1,5 +1,6 @@
 import { Injectable, LoggerService as NestLoggerService } from '@nestjs/common';
 import pino, { Logger } from 'pino';
+import { redactSecrets } from '@src/common/redact-secrets';
 
 @Injectable()
 export class LoggerService implements NestLoggerService {
@@ -39,6 +40,7 @@ export class LoggerService implements NestLoggerService {
   }
 
   info(message: string, meta?: Record<string, unknown>, context?: string) {
-    this.logger.info({ context, ...meta }, message);
+    const safeMeta = meta ? (redactSecrets(meta) as Record<string, unknown>) : undefined;
+    this.logger.info({ context, ...safeMeta }, message);
   }
 }

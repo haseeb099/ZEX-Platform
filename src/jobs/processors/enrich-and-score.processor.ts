@@ -10,6 +10,7 @@ import { ScoringService } from '@src/scoring/scoring.service';
 import { TwentyClient } from '@src/twenty/twenty.client';
 import { TwentyPerson } from '@src/twenty/twenty.types';
 import { ENRICH_AND_SCORE_QUEUE } from '../jobs.constants';
+import { CRM_WRITE_ACTIONS, JobActionCheckpointService } from '../job-action-checkpoint.service';
 
 type EnrichJobData = {
   tenantId: string;
@@ -37,6 +38,7 @@ export class EnrichAndScoreProcessor extends WorkerHost {
     private readonly audit: AuditService,
     private readonly logger: LoggerService,
     private readonly config: ConfigService,
+    private readonly checkpoints: JobActionCheckpointService,
   ) {
     super();
   }
@@ -90,17 +92,45 @@ export class EnrichAndScoreProcessor extends WorkerHost {
       );
 
       // Required CRM writes — failures must propagate (no warn-and-continue).
-      await this.twenty.updatePerson(tenantId, personTwentyId, {
-        jobTitle: enrichmentData.jobTitle || person.jobTitle || undefined,
-        company: enrichmentData.companyName || undefined,
-        location: enrichmentData.location || undefined,
-      });
-      await this.twenty.createNote(tenantId, {
-        personId: personTwentyId,
-        text: `AI Automation: Score ${score}/100 (${Object.entries(factors)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(', ')})`,
-      });
+      // Checkpoints skip actions already confirmed successful for this webhook event.
+      const updateDone = await this.checkpoints.getCompleted(
+        tenantId,
+        webhookLogId,
+        CRM_WRITE_ACTIONS.UPDATE_PERSON,
+      );
+      if (!updateDone.completed) {
+        await this.twenty.updatePerson(tenantId, personTwentyId, {
+          jobTitle: enrichmentData.jobTitle || person.jobTitle || undefined,
+          company: enrichmentData.companyName || undefined,
+          location: enrichmentData.location || undefined,
+        });
+        await this.checkpoints.recordSuccess(
+          tenantId,
+          webhookLogId,
+          personTwentyId,
+          CRM_WRITE_ACTIONS.UPDATE_PERSON,
+        );
+      }
+
+      const noteDone = await this.checkpoints.getCompleted(
+        tenantId,
+        webhookLogId,
+        CRM_WRITE_ACTIONS.CREATE_NOTE,
+      );
+      if (!noteDone.completed) {
+        await this.twenty.createNote(tenantId, {
+          personId: personTwentyId,
+          text: `AI Automation: Score ${score}/100 (${Object.entries(factors)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(', ')})`,
+        });
+        await this.checkpoints.recordSuccess(
+          tenantId,
+          webhookLogId,
+          personTwentyId,
+          CRM_WRITE_ACTIONS.CREATE_NOTE,
+        );
+      }
 
       let opportunityCreated = false;
       let opportunityTwentyId: string | undefined;
@@ -110,16 +140,31 @@ export class EnrichAndScoreProcessor extends WorkerHost {
         score >= tenant.opportunityThreshold;
 
       if (shouldCreateOpp) {
-        // Opportunity is required when threshold is met — failure must propagate.
-        // opportunityCreated is true only after Twenty returns a real opportunity id.
-        const opp = await this.twenty.createOpportunity(tenantId, {
-          personId: personTwentyId,
-          name: `${person.firstName || 'Lead'} - Auto-qualified`,
-          stage: 'prospect',
-          probability: Math.round(score / 10),
-        });
-        opportunityCreated = true;
-        opportunityTwentyId = opp.id;
+        const oppDone = await this.checkpoints.getCompleted(
+          tenantId,
+          webhookLogId,
+          CRM_WRITE_ACTIONS.CREATE_OPPORTUNITY,
+        );
+        if (!oppDone.completed) {
+          const opp = await this.twenty.createOpportunity(tenantId, {
+            personId: personTwentyId,
+            name: `${person.firstName || 'Lead'} - Auto-qualified`,
+            stage: 'prospect',
+            probability: Math.round(score / 10),
+          });
+          await this.checkpoints.recordSuccess(
+            tenantId,
+            webhookLogId,
+            personTwentyId,
+            CRM_WRITE_ACTIONS.CREATE_OPPORTUNITY,
+            opp.id,
+          );
+          opportunityCreated = true;
+          opportunityTwentyId = opp.id;
+        } else {
+          opportunityCreated = true;
+          opportunityTwentyId = oppDone.externalId;
+        }
       }
 
       await this.prisma.scoreHistory.create({

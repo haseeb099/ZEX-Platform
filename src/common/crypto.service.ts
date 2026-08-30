@@ -9,7 +9,13 @@ export class CryptoService {
 
   constructor(private readonly config: ConfigService) {
     const keyHex = this.config.getOrThrow<string>('MASTER_KEY');
+    if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+      throw new Error('MASTER_KEY must be 64 hex characters (32 bytes when decoded)');
+    }
     this.masterKey = Buffer.from(keyHex, 'hex');
+    if (this.masterKey.length !== 32) {
+      throw new Error('MASTER_KEY must decode to exactly 32 bytes');
+    }
   }
 
   encrypt(plaintext: string): string {

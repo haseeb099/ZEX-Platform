@@ -91,6 +91,21 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       },
     } as ConfigService;
 
+    const completedActions = new Set<string>();
+    const checkpoints = {
+      getCompleted: jest.fn(async (_tenantId: string, _webhookLogId: string, action: string) => {
+        if (completedActions.has(action)) {
+          return { completed: true as const, externalId: 'opp_cached_1' };
+        }
+        return { completed: false as const };
+      }),
+      recordSuccess: jest.fn(
+        async (_tenantId: string, _webhookLogId: string, _personId: string, action: string) => {
+          completedActions.add(action);
+        },
+      ),
+    };
+
     const processor = new EnrichAndScoreProcessor(
       prisma as never,
       enrichment as never,
@@ -99,6 +114,7 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       audit as never,
       logger as never,
       config,
+      checkpoints as never,
     );
 
     const job = {
@@ -119,7 +135,18 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       },
     } as Job;
 
-    return { processor, prisma, enrichment, scoring, twenty, audit, logger, job };
+    return {
+      processor,
+      prisma,
+      enrichment,
+      scoring,
+      twenty,
+      audit,
+      logger,
+      job,
+      checkpoints,
+      completedActions,
+    };
   }
 
   beforeEach(() => {
@@ -226,5 +253,26 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
     );
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     expect(JSON.stringify(prisma.scoreHistory.create.mock.calls)).not.toContain('pending-twenty-');
+  });
+
+  it('skips UpdatePerson and CreateNote on retry when checkpoints already committed', async () => {
+    const { processor, twenty, audit, job, checkpoints, completedActions } = buildProcessor();
+
+    completedActions.add('update_person');
+    completedActions.add('create_note');
+
+    await expect(processor.process(job)).resolves.toMatchObject({ opportunityCreated: true });
+
+    expect(twenty.updatePerson).not.toHaveBeenCalled();
+    expect(twenty.createNote).not.toHaveBeenCalled();
+    expect(twenty.createOpportunity).toHaveBeenCalled();
+    expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
+      tenantId,
+      webhookLogId,
+      personTwentyId,
+      'create_opportunity',
+      'opp_real_1',
+    );
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 });
