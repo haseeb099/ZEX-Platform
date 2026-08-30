@@ -12,7 +12,7 @@ Operational and security hardening applied before staging against pinned ZEX-CRM
 
 - `tenantId`
 - `webhookLogId` (one webhook processing event)
-- `action` (`update_person`, `create_note`, `create_opportunity`)
+- `action` (`update_person`, `create_note`, `link_note_to_person`, `create_opportunity`)
 
 Unique constraint: `(tenantId, webhookLogId, action)`.
 
@@ -22,8 +22,11 @@ On BullMQ retry after partial success:
 
 1. `GetPerson` may run again (no checkpoint — read is safe to repeat).
 2. `UpdatePerson` skipped if checkpoint `update_person` is `completed`.
-3. `CreateNote` skipped if checkpoint `create_note` is `completed`.
-4. `CreateOpportunity` retried if not checkpointed; on success stores `externalId`.
+3. `CreateNote` skipped if checkpoint `create_note` is `completed` (stores real Note id in `externalId`).
+4. `CreateNoteTarget` (`link_note_to_person`) skipped only after a successful link; if Note exists but link failed, retry reuses `CREATE_NOTE.externalId` and does **not** create another Note.
+5. `CreateOpportunity` retried if not checkpointed; on success stores `externalId`.
+
+Missing `externalId` on a completed `create_note` checkpoint **fails closed** (no replacement Note).
 
 Checkpoints are written **only after confirmed Twenty response**. Failed actions do not checkpoint.
 

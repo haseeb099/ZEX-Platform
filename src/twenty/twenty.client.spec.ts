@@ -28,6 +28,7 @@ describe('TwentyClient', () => {
     expect(typeof client.updatePerson).toBe('function');
     expect(typeof client.createOpportunity).toBe('function');
     expect(typeof client.createNote).toBe('function');
+    expect(typeof client.createNoteTarget).toBe('function');
 
     const sample: TwentyPerson = { id: 'person_1', email: 'a@b.com' };
     expect(sample.id).toBe('person_1');
@@ -44,7 +45,11 @@ describe('TwentyClient', () => {
     });
 
     const mockRequest = jest.fn().mockResolvedValue({
-      person: { id: 'person_1', email: 'a@b.com' },
+      person: {
+        id: 'person_1',
+        name: { firstName: 'Ada', lastName: 'Lovelace' },
+        emails: { primaryEmail: 'a@b.com' },
+      },
     });
     (GraphQLClient as unknown as jest.Mock).mockImplementation(() => ({
       request: mockRequest,

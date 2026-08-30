@@ -17,6 +17,7 @@ import { PrismaService } from '@src/common/prisma/prisma.service';
 import { LoggerService } from '@src/common/logger/logger.service';
 import { ENRICH_AND_SCORE_QUEUE } from '@src/jobs/jobs.constants';
 import { TwentyConnectionService } from '@src/twenty/twenty-connection.service';
+import { normalizeWebhookPersonRecord } from '@src/twenty/twenty-person.mapper';
 import { IdempotencyService } from './idempotency.service';
 import { SignatureService } from './signature.service';
 
@@ -86,8 +87,9 @@ export class WebhookController {
     }
 
     const event = body.eventName || body.event || 'unknown';
-    const personRecord = body.record || body.data;
-    const personId = personRecord?.id;
+    const personRecordRaw = (body.record || body.data) as Record<string, unknown> | undefined;
+    const personRecord = normalizeWebhookPersonRecord(personRecordRaw);
+    const personId = (personRecord?.id as string | undefined) || personRecordRaw?.id;
     if (!personId && event.startsWith('person.')) {
       throw new BadRequestException({ error: 'Missing person id', code: 'INVALID_PAYLOAD' });
     }

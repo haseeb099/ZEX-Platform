@@ -14,8 +14,11 @@ export type TwentyPerson = {
 };
 
 export type UpdatePersonInput = {
+  /** @deprecated Pinned Twenty links company by id/connect — use companyId when known. */
   company?: string;
+  companyId?: string;
   jobTitle?: string;
+  /** Not a standard Person field on pinned Twenty — ignored at CRM boundary. */
   location?: string;
   [key: string]: unknown;
 };
@@ -28,6 +31,11 @@ export type CreateOpportunityInput = {
 };
 
 export type CreateNoteInput = {
-  personId: string;
   text: string;
+  title?: string;
+};
+
+export type CreateNoteTargetInput = {
+  noteId: string;
+  personId: string;
 };

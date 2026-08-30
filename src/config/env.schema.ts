@@ -30,6 +30,8 @@ export const envSchema = Joi.object({
    * Default false — production/staging must not hide CRM read failures.
    */
   ALLOW_TWENTY_SNAPSHOT_FALLBACK: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** Staging-only: return deterministic enrichment (no Clearbit/Apollo/Hunter). */
+  STAGING_DETERMINISTIC_ENRICHMENT: Joi.boolean().truthy('true').falsy('false').default(false),
   /**
    * Optional overrides for enrich-and-score job attempts/backoff (defaults: 5 / 2000ms).
    * Contract tests may set attempts=1 for terminal CRM failure assertions without changing defaults.

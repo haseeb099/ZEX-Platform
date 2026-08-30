@@ -8,7 +8,48 @@ export type FakeGraphqlBody = {
 };
 
 export type GraphqlOperationName =
-  'GetPerson' | 'UpdatePerson' | 'CreateNote' | 'CreateOpportunity' | 'Unknown';
+  | 'GetPerson'
+  | 'UpdatePerson'
+  | 'CreateNote'
+  | 'CreateNoteTarget'
+  | 'CreateOpportunity'
+  | 'Unknown';
+
+export function toPinnedPersonResponse(person: FakePerson) {
+  return {
+    id: person.id,
+    name: {
+      firstName: person.firstName ?? null,
+      lastName: person.lastName ?? null,
+    },
+    emails: {
+      primaryEmail: person.email ?? null,
+    },
+    jobTitle: person.jobTitle ?? null,
+    createdAt: person.createdAt,
+    updatedAt: person.updatedAt,
+    company: person.company
+      ? {
+          id: person.company.id,
+          name: person.company.name ?? null,
+          domainName: person.company.website ? { primaryLinkUrl: person.company.website } : null,
+        }
+      : null,
+  };
+}
+
+export function classifyGraphqlOperation(query: string): GraphqlOperationName {
+  if (query.includes('query GetPerson') || /\bperson\s*\(\s*filter/.test(query)) {
+    return 'GetPerson';
+  }
+  if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
+    return 'UpdatePerson';
+  }
+  if (query.includes('createNoteTarget')) return 'CreateNoteTarget';
+  if (query.includes('createNote')) return 'CreateNote';
+  if (query.includes('createOpportunity')) return 'CreateOpportunity';
+  return 'Unknown';
+}
 
 export type CapturedGraphqlRequest = {
   method: string;
@@ -31,16 +72,6 @@ export type FakePerson = {
   company?: { id: string; name?: string; website?: string } | null;
 };
 
-export function classifyGraphqlOperation(query: string): GraphqlOperationName {
-  if (query.includes('query GetPerson') || /\bperson\s*\(/.test(query)) return 'GetPerson';
-  if (query.includes('mutation UpdatePerson') || query.includes('updatePerson')) {
-    return 'UpdatePerson';
-  }
-  if (query.includes('createOpportunity')) return 'CreateOpportunity';
-  if (query.includes('createNote')) return 'CreateNote';
-  return 'Unknown';
-}
-
 async function sleep(ms: number) {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -57,7 +88,13 @@ export class FakeTwentyGraphqlServer {
   private failOnceOperations = new Map<GraphqlOperationName, number>();
   private requestOrder = 0;
   private noteCounter = 0;
+  private noteTargetCounter = 0;
   private oppCounter = 0;
+  private readonly notes = new Map<string, { id: string; title?: string; markdown?: string }>();
+  private readonly noteTargets = new Map<
+    string,
+    { id: string; noteId: string; targetPersonId: string }
+  >();
 
   seedPerson(person: FakePerson) {
     this.persons.set(person.id, { ...person });
@@ -94,7 +131,18 @@ export class FakeTwentyGraphqlServer {
     this.requests.length = 0;
     this.requestOrder = 0;
     this.noteCounter = 0;
+    this.noteTargetCounter = 0;
     this.oppCounter = 0;
+    this.notes.clear();
+    this.noteTargets.clear();
+  }
+
+  getNotes() {
+    return [...this.notes.values()];
+  }
+
+  getNoteTargets() {
+    return [...this.noteTargets.values()];
   }
 
   async waitForRequest(
@@ -219,17 +267,18 @@ export class FakeTwentyGraphqlServer {
     const variables = (body.variables || {}) as Record<string, unknown>;
 
     if (operation === 'GetPerson') {
-      const id = String(variables.id || '');
+      const filter = (variables.filter || {}) as { id?: { eq?: string } };
+      const id = String(filter.id?.eq || variables.id || '');
       const person = this.persons.get(id);
       if (!person) {
         return { errors: [{ message: `Person ${id} not found` }] };
       }
-      return { data: { person } };
+      return { data: { person: toPinnedPersonResponse(person) } };
     }
 
     if (operation === 'UpdatePerson') {
-      const id = String(variables.id || '');
-      const input = (variables.input || {}) as Record<string, unknown>;
+      const id = String(variables.personId || variables.id || '');
+      const input = (variables.data || variables.input || {}) as Record<string, unknown>;
       const existing = this.persons.get(id) || { id };
       const updated: FakePerson = {
         ...existing,
@@ -242,25 +291,20 @@ export class FakeTwentyGraphqlServer {
       this.persons.set(id, updated);
       return {
         data: {
-          updatePerson: {
-            id: updated.id,
-            firstName: updated.firstName ?? null,
-            lastName: updated.lastName ?? null,
-            email: updated.email ?? null,
-            jobTitle: updated.jobTitle ?? null,
-          },
+          updatePerson: toPinnedPersonResponse(updated),
         },
       };
     }
 
     if (operation === 'CreateOpportunity') {
       this.oppCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
       return {
         data: {
           createOpportunity: {
             id: `opp_contract_${this.oppCounter}`,
-            name: String((variables.input as { name?: string })?.name || 'Opportunity'),
-            stage: 'prospect',
+            name: String(data.name || 'Opportunity'),
+            stage: String(data.stage || 'NEW'),
           },
         },
       };
@@ -268,13 +312,34 @@ export class FakeTwentyGraphqlServer {
 
     if (operation === 'CreateNote') {
       this.noteCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
+      const bodyV2 = (data.bodyV2 || {}) as Record<string, unknown>;
+      const id = `note_contract_${this.noteCounter}`;
+      this.notes.set(id, {
+        id,
+        title: typeof data.title === 'string' ? data.title : undefined,
+        markdown: typeof bodyV2.markdown === 'string' ? bodyV2.markdown : undefined,
+      });
       return {
         data: {
-          createNote: {
-            id: `note_contract_${this.noteCounter}`,
-            text: 'ok',
-            createdAt: new Date().toISOString(),
-          },
+          createNote: { id },
+        },
+      };
+    }
+
+    if (operation === 'CreateNoteTarget') {
+      this.noteTargetCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
+      const noteId = String(data.noteId || '');
+      const targetPersonId = String(data.targetPersonId || '');
+      if (!this.notes.has(noteId)) {
+        return { errors: [{ message: `Note ${noteId} not found for CreateNoteTarget` }] };
+      }
+      const id = `note_target_${this.noteTargetCounter}`;
+      this.noteTargets.set(id, { id, noteId, targetPersonId });
+      return {
+        data: {
+          createNoteTarget: { id },
         },
       };
     }

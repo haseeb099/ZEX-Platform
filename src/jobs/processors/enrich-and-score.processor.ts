@@ -101,8 +101,7 @@ export class EnrichAndScoreProcessor extends WorkerHost {
       if (!updateDone.completed) {
         await this.twenty.updatePerson(tenantId, personTwentyId, {
           jobTitle: enrichmentData.jobTitle || person.jobTitle || undefined,
-          company: enrichmentData.companyName || undefined,
-          location: enrichmentData.location || undefined,
+          companyId: person.company?.id,
         });
         await this.checkpoints.recordSuccess(
           tenantId,
@@ -117,9 +116,9 @@ export class EnrichAndScoreProcessor extends WorkerHost {
         webhookLogId,
         CRM_WRITE_ACTIONS.CREATE_NOTE,
       );
+      let noteId: string | undefined;
       if (!noteDone.completed) {
-        await this.twenty.createNote(tenantId, {
-          personId: personTwentyId,
+        const note = await this.twenty.createNote(tenantId, {
           text: `AI Automation: Score ${score}/100 (${Object.entries(factors)
             .map(([k, v]) => `${k}: ${v}`)
             .join(', ')})`,
@@ -129,6 +128,34 @@ export class EnrichAndScoreProcessor extends WorkerHost {
           webhookLogId,
           personTwentyId,
           CRM_WRITE_ACTIONS.CREATE_NOTE,
+          note.id,
+        );
+        noteId = note.id;
+      } else {
+        if (!noteDone.externalId) {
+          throw new Error(
+            `CREATE_NOTE checkpoint completed without externalId for webhookLogId=${webhookLogId}`,
+          );
+        }
+        noteId = noteDone.externalId;
+      }
+
+      const linkDone = await this.checkpoints.getCompleted(
+        tenantId,
+        webhookLogId,
+        CRM_WRITE_ACTIONS.LINK_NOTE_TO_PERSON,
+      );
+      if (!linkDone.completed) {
+        await this.twenty.createNoteTarget(tenantId, {
+          noteId,
+          personId: personTwentyId,
+        });
+        await this.checkpoints.recordSuccess(
+          tenantId,
+          webhookLogId,
+          personTwentyId,
+          CRM_WRITE_ACTIONS.LINK_NOTE_TO_PERSON,
+          noteId,
         );
       }
 

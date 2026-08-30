@@ -97,6 +97,7 @@ export async function seedTenantWithTwentyConnection(
 }
 
 export async function deleteTenantCascade(prisma: PrismaService, tenantId: string) {
+  await prisma.jobActionCheckpoint.deleteMany({ where: { tenantId } });
   await prisma.webhookLog.deleteMany({ where: { tenantId } });
   await prisma.scoreHistory.deleteMany({ where: { tenantId } });
   await prisma.auditLog.deleteMany({ where: { tenantId } });

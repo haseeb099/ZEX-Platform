@@ -13,6 +13,7 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       getPerson: jest.Mock;
       updatePerson: jest.Mock;
       createNote: jest.Mock;
+      createNoteTarget: jest.Mock;
       createOpportunity: jest.Mock;
     }>;
     enableAutoOpportunity?: boolean;
@@ -65,6 +66,7 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       }),
       updatePerson: jest.fn().mockResolvedValue({ id: personTwentyId, jobTitle: 'VP Engineering' }),
       createNote: jest.fn().mockResolvedValue({ id: 'note_1' }),
+      createNoteTarget: jest.fn().mockResolvedValue({ id: 'note_target_1' }),
       createOpportunity: jest
         .fn()
         .mockResolvedValue({ id: 'opp_real_1', name: 'Ada - Auto-qualified' }),
@@ -91,17 +93,23 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       },
     } as ConfigService;
 
-    const completedActions = new Set<string>();
+    const completedActions = new Map<string, string | undefined>();
     const checkpoints = {
       getCompleted: jest.fn(async (_tenantId: string, _webhookLogId: string, action: string) => {
         if (completedActions.has(action)) {
-          return { completed: true as const, externalId: 'opp_cached_1' };
+          return { completed: true as const, externalId: completedActions.get(action) };
         }
         return { completed: false as const };
       }),
       recordSuccess: jest.fn(
-        async (_tenantId: string, _webhookLogId: string, _personId: string, action: string) => {
-          completedActions.add(action);
+        async (
+          _tenantId: string,
+          _webhookLogId: string,
+          _personId: string,
+          action: string,
+          externalId?: string,
+        ) => {
+          completedActions.set(action, externalId);
         },
       ),
     };
@@ -211,6 +219,56 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
     });
 
     await expect(processor.process(job)).rejects.toThrow('note failed');
+    expect(twenty.createNoteTarget).not.toHaveBeenCalled();
+    expect(twenty.createOpportunity).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('creates Note then links NoteTarget on fresh success path', async () => {
+    const { processor, twenty, checkpoints, job } = buildProcessor();
+
+    await expect(processor.process(job)).resolves.toMatchObject({ opportunityCreated: true });
+
+    expect(twenty.createNote).toHaveBeenCalledWith(
+      tenantId,
+      expect.objectContaining({ text: expect.stringContaining('AI Automation: Score') }),
+    );
+    expect(twenty.createNoteTarget).toHaveBeenCalledWith(tenantId, {
+      noteId: 'note_1',
+      personId: personTwentyId,
+    });
+    expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
+      tenantId,
+      webhookLogId,
+      personTwentyId,
+      'create_note',
+      'note_1',
+    );
+    expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
+      tenantId,
+      webhookLogId,
+      personTwentyId,
+      'link_note_to_person',
+      'note_1',
+    );
+  });
+
+  it('propagates CreateNoteTarget failure without success audit or opportunity', async () => {
+    const { processor, twenty, audit, checkpoints, job } = buildProcessor({
+      twenty: {
+        createNoteTarget: jest.fn().mockRejectedValue(new Error('note target failed')),
+      },
+    });
+
+    await expect(processor.process(job)).rejects.toThrow('note target failed');
+    expect(twenty.createNote).toHaveBeenCalled();
+    expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
+      tenantId,
+      webhookLogId,
+      personTwentyId,
+      'create_note',
+      'note_1',
+    );
     expect(twenty.createOpportunity).not.toHaveBeenCalled();
     expect(audit.log).not.toHaveBeenCalled();
   });
@@ -258,13 +316,15 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
   it('skips UpdatePerson and CreateNote on retry when checkpoints already committed', async () => {
     const { processor, twenty, audit, job, checkpoints, completedActions } = buildProcessor();
 
-    completedActions.add('update_person');
-    completedActions.add('create_note');
+    completedActions.set('update_person', undefined);
+    completedActions.set('create_note', 'note_1');
+    completedActions.set('link_note_to_person', 'note_1');
 
     await expect(processor.process(job)).resolves.toMatchObject({ opportunityCreated: true });
 
     expect(twenty.updatePerson).not.toHaveBeenCalled();
     expect(twenty.createNote).not.toHaveBeenCalled();
+    expect(twenty.createNoteTarget).not.toHaveBeenCalled();
     expect(twenty.createOpportunity).toHaveBeenCalled();
     expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
       tenantId,
@@ -274,5 +334,42 @@ describe('EnrichAndScoreProcessor CRM failure semantics', () => {
       'opp_real_1',
     );
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it('retries missing NoteTarget link using CREATE_NOTE externalId without recreating Note', async () => {
+    const { processor, twenty, checkpoints, completedActions, job } = buildProcessor();
+
+    completedActions.set('update_person', undefined);
+    completedActions.set('create_note', 'note_existing_1');
+
+    await expect(processor.process(job)).resolves.toMatchObject({ opportunityCreated: true });
+
+    expect(twenty.createNote).not.toHaveBeenCalled();
+    expect(twenty.createNoteTarget).toHaveBeenCalledWith(tenantId, {
+      noteId: 'note_existing_1',
+      personId: personTwentyId,
+    });
+    expect(checkpoints.recordSuccess).toHaveBeenCalledWith(
+      tenantId,
+      webhookLogId,
+      personTwentyId,
+      'link_note_to_person',
+      'note_existing_1',
+    );
+  });
+
+  it('fails closed when CREATE_NOTE checkpoint is completed without externalId', async () => {
+    const { processor, twenty, audit, completedActions, job } = buildProcessor();
+
+    completedActions.set('update_person', undefined);
+    completedActions.set('create_note', undefined);
+
+    await expect(processor.process(job)).rejects.toThrow(
+      /CREATE_NOTE checkpoint completed without externalId/,
+    );
+    expect(twenty.createNote).not.toHaveBeenCalled();
+    expect(twenty.createNoteTarget).not.toHaveBeenCalled();
+    expect(twenty.createOpportunity).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 });

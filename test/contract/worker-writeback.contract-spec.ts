@@ -294,17 +294,16 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     const getPerson = await serverA.waitForOperation('GetPerson', { timeoutMs: 5000 });
     expect(getPerson[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(getPerson[0].url).toBe('/graphql');
-    expect(getPerson[0].body.variables).toEqual({ id: personId });
+    expect(getPerson[0].body.variables).toEqual({ filter: { id: { eq: personId } } });
 
     const updates = serverA.getRequestsByOperation('UpdatePerson');
     expect(updates).toHaveLength(1);
     expect(updates[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(updates[0].body.variables).toEqual({
-      id: personId,
-      input: {
+      personId,
+      data: {
         jobTitle: 'VP Engineering',
-        company: 'Acme',
-        location: 'London',
+        companyId: 'co_acme',
       },
     });
 
@@ -313,21 +312,25 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     expect(notes[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(JSON.stringify(notes[0].body.variables)).toContain('AI Automation: Score');
 
+    const noteTargets = serverA.getRequestsByOperation('CreateNoteTarget');
+    expect(noteTargets).toHaveLength(1);
+
     const opps = serverA.getRequestsByOperation('CreateOpportunity');
     expect(opps).toHaveLength(1);
     expect(opps[0].authorization).toBe(`Bearer ${apiKeyA}`);
     expect(opps[0].body.variables).toMatchObject({
-      input: {
-        personId,
+      data: {
+        pointOfContactId: personId,
         name: 'Ada - Auto-qualified',
-        stage: 'prospect',
+        stage: 'NEW',
       },
     });
 
     // Operation order: read before writes.
     expect(getPerson[0].order).toBeLessThan(updates[0].order);
     expect(updates[0].order).toBeLessThan(notes[0].order);
-    expect(notes[0].order).toBeLessThan(opps[0].order);
+    expect(notes[0].order).toBeLessThan(noteTargets[0].order);
+    expect(noteTargets[0].order).toBeLessThan(opps[0].order);
 
     const history = await prisma.scoreHistory.findFirst({
       where: { tenantId: tenantAId, personTwentyId: personId },
@@ -641,8 +644,97 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     expect(checkpoints.map(c => c.action).sort()).toEqual([
       'create_note',
       'create_opportunity',
+      'link_note_to_person',
       'update_person',
     ]);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: tenantAId,
+        resourceTwentyId: personId,
+        action: 'enrich_and_score_person',
+        success: true,
+      },
+    });
+    expect(audit).toBeTruthy();
+  }, 90000);
+
+  it('retries CreateNoteTarget without recreating Note after partial note-link failure', async () => {
+    process.env.BULLMQ_ENRICH_BACKOFF_MS = '200';
+
+    const personId = `person_worker_note_link_${Date.now()}`;
+    serverA.seedPerson({
+      id: personId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@acme.test',
+      jobTitle: 'Engineer',
+      updatedAt: new Date().toISOString(),
+    });
+    serverA.failOperationTimes('CreateNoteTarget', 1);
+
+    const eventId = `worker-note-link-${personId}`;
+    const response = await postSignedWebhook(
+      tenantAId,
+      webhookSecretA,
+      buildPayload(personId),
+      eventId,
+    );
+    expect(response.statusCode).toBe(200);
+
+    await waitForCondition(
+      async () => {
+        const log = await prisma.webhookLog.findFirst({
+          where: { tenantId: tenantAId, event: 'person.created' },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (log?.status !== 'success' || !log.jobId) return false;
+        const job = await queue.getJob(log.jobId);
+        return (await job?.getState()) === 'completed';
+      },
+      { timeoutMs: 45000, label: 'note-link retry completed' },
+    );
+
+    delete process.env.BULLMQ_ENRICH_BACKOFF_MS;
+
+    expect(serverA.countOperations('UpdatePerson')).toBe(1);
+    expect(serverA.countOperations('CreateNote')).toBe(1);
+    expect(serverA.countOperations('CreateNoteTarget')).toBe(2);
+    expect(serverA.countOperations('CreateOpportunity')).toBe(1);
+
+    expect(serverA.getNotes()).toHaveLength(1);
+    expect(serverA.getNoteTargets()).toHaveLength(1);
+    expect(serverA.getNoteTargets()[0].noteId).toBe(serverA.getNotes()[0].id);
+    expect(serverA.getNoteTargets()[0].targetPersonId).toBe(personId);
+
+    const log = await prisma.webhookLog.findFirstOrThrow({
+      where: { tenantId: tenantAId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(log.status).toBe('success');
+
+    const noteCheckpoint = await prisma.jobActionCheckpoint.findUniqueOrThrow({
+      where: {
+        tenantId_webhookLogId_action: {
+          tenantId: tenantAId,
+          webhookLogId: log.id,
+          action: 'create_note',
+        },
+      },
+    });
+    expect(noteCheckpoint.externalId).toBe(serverA.getNotes()[0].id);
+
+    const linkCheckpoint = await prisma.jobActionCheckpoint.findUniqueOrThrow({
+      where: {
+        tenantId_webhookLogId_action: {
+          tenantId: tenantAId,
+          webhookLogId: log.id,
+          action: 'link_note_to_person',
+        },
+      },
+    });
+    expect(linkCheckpoint.status).toBe('completed');
+    expect(linkCheckpoint.externalId).toBe(noteCheckpoint.externalId);
 
     const audit = await prisma.auditLog.findFirst({
       where: {

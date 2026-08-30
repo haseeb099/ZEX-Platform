@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { CryptoService } from '@src/common/crypto.service';
 import { PrismaService } from '@src/common/prisma/prisma.service';
 import { TwentyPerson } from '@src/twenty/twenty.types';
@@ -15,6 +16,7 @@ export class EnrichmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: CryptoService,
+    private readonly config: ConfigService,
     private readonly clearbit: ClearbitProvider,
     private readonly apollo: ApolloProvider,
     private readonly hunter: HunterProvider,
@@ -22,6 +24,22 @@ export class EnrichmentService {
   ) {}
 
   async enrichPerson(tenantId: string, person: TwentyPerson): Promise<EnrichmentResult> {
+    if (this.config.get<boolean>('STAGING_DETERMINISTIC_ENRICHMENT') === true) {
+      return {
+        personEmail: person.email || 'zex-staging-test@example.invalid',
+        companyName: person.company?.name || 'Acme Staging',
+        companyDomain: person.company?.website || 'acme.staging.test',
+        companySize: '51-200',
+        industry: 'SaaS',
+        location: 'London',
+        jobTitle: 'VP Engineering',
+        jobFunction: 'Engineering',
+        technologies: ['typescript'],
+        source: 'staging-deterministic',
+        confidence: 100,
+      };
+    }
+
     const cached = await this.prisma.enrichedPerson.findUnique({
       where: {
         tenantId_personTwentyId: { tenantId, personTwentyId: person.id },
