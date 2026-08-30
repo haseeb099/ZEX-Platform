@@ -32,7 +32,7 @@ export class EnrichmentService {
         companySize: '51-200',
         industry: 'SaaS',
         location: 'London',
-        jobTitle: person.jobTitle || 'VP Engineering',
+        jobTitle: 'VP Engineering',
         jobFunction: 'Engineering',
         technologies: ['typescript'],
         source: 'staging-deterministic',
