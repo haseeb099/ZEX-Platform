@@ -31,7 +31,11 @@ export type CreateOpportunityInput = {
 };
 
 export type CreateNoteInput = {
-  personId: string;
   text: string;
   title?: string;
+};
+
+export type CreateNoteTargetInput = {
+  noteId: string;
+  personId: string;
 };

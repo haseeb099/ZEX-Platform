@@ -4,7 +4,10 @@ import { PrismaService } from '@src/common/prisma/prisma.service';
 /** CRM write actions tracked for partial-success retry idempotency. */
 export const CRM_WRITE_ACTIONS = {
   UPDATE_PERSON: 'update_person',
+  /** Persists real Twenty Note id in `externalId` after createNote response. */
   CREATE_NOTE: 'create_note',
+  /** Links an existing Note to a Person via createNoteTarget (separate from CREATE_NOTE). */
+  LINK_NOTE_TO_PERSON: 'link_note_to_person',
   CREATE_OPPORTUNITY: 'create_opportunity',
 } as const;
 

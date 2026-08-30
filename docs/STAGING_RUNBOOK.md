@@ -102,7 +102,7 @@ node scripts/staging/verify-staging-evidence.js
 
 - GraphQL probe steps pass against real Twenty
 - `WebhookLog` → `success`
-- `JobActionCheckpoint` → at least `update_person`, `create_note`
+- `JobActionCheckpoint` → at least `update_person`, `create_note`, `link_note_to_person`
 - Person `jobTitle` → `VP Engineering` (deterministic enrichment)
 - Wrong webhook secret → `401`, no new logs
 

@@ -61,11 +61,11 @@ node scripts/staging/verify-staging-evidence.js
 | Signed webhook (`person.created`, pinned payload shape) | PASS — `WebhookLog` success |
 | BullMQ worker (`EnrichAndScoreProcessor`) | PASS — job completed |
 | Person write-back (`jobTitle`) | PASS — `VP Engineering` in real CRM |
-| Automation note | PASS — `create_note` checkpoint committed |
+| Automation note | PASS — `create_note` + `link_note_to_person` checkpoints |
 | Opportunity (auto) | **Not created** — score `55` below threshold; expected with default rules |
 | `AuditLog` | PASS — `enrich_and_score_person`, success |
 | `ScoreHistory` | PASS — score `55` recorded |
-| `JobActionCheckpoint` | PASS — `update_person`, `create_note` |
+| `JobActionCheckpoint` | PASS — `update_person`, `create_note`, `link_note_to_person` |
 
 ### Webhook payload (observed / used)
 
@@ -102,6 +102,24 @@ Signed POST body fields validated in smoke:
 | `createOpportunity(input:)` / `personId` | Uses `pointOfContactId`, stage `NEW` | Updated client + stage mapper | Contract tests |
 | Webhook `record.name` / `record.emails` | Platform assumed flat `firstName`/`email` | `normalizeWebhookPersonRecord` | `webhook-payload.pinned.spec.ts` |
 | Staging write-back expected `VP Engineering` | Deterministic enrichment preserved incoming `jobTitle` | Always emit `VP Engineering` when `STAGING_DETERMINISTIC_ENRICHMENT=true` | Staging smoke + live run |
+| Note create+link not separately checkpointed | Pinned Twenty needs `createNote` then `createNoteTarget` | Split TwentyClient APIs + `CREATE_NOTE` / `LINK_NOTE_TO_PERSON` checkpoints | Contract: CreateNoteTarget fail-once retry |
+
+### Note retry atomicity (post-review fix)
+
+Pinned Twenty note write-back is two irreversible GraphQL mutations. After ChatGPT review, Platform checkpoints them separately:
+
+1. `createNote` → checkpoint `create_note` with real Note `externalId`
+2. `createNoteTarget` → checkpoint `link_note_to_person`
+
+If step 2 fails, BullMQ retry reuses the Note id and does not call `createNote` again.
+
+### Staging revalidation after note-link fix
+
+```bash
+npm run test:staging:twenty
+```
+
+Result: **PASS** — `checkpoints=3` (`update_person`, `create_note`, `link_note_to_person`); Person `jobTitle` → `VP Engineering`; WebhookLog success; wrong-secret still `401`.
 
 **No ZEX-CRM core changes** were required.
 

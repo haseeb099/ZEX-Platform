@@ -56,6 +56,7 @@ Also covered:
 - **Enrichment failure** — controlled enrichment throws BullMQ `UnrecoverableError` → job `failed`, `WebhookLog.status=failed`, no success audit, no CRM write mutations. Uses `UnrecoverableError` so CI does not wait through production’s 5× exponential backoff; production retry/backoff options on the webhook-enqueued job are unchanged when env overrides are unset.
 - **CRM write failure** — fake Twenty fails `UpdatePerson` or `CreateOpportunity` → error propagates → BullMQ job fails → `WebhookLog` failed → **no** `AuditLog.success=true` → **no** `ScoreHistory` / synthetic `pending-twenty-*` opportunity ids → no further mutations after the failed write. Contract tests set `BULLMQ_ENRICH_ATTEMPTS=1` for terminal assertions only; production default remains 5 attempts / 2000ms exponential backoff.
 - **Partial-success retry idempotency** — first attempt succeeds `UpdatePerson` + `CreateNote`, fails `CreateOpportunity`; retry skips committed writes and succeeds opportunity → exactly one note, two opportunity attempts (one fail + one success), checkpoints scoped per `webhookLogId`.
+- **Note link retry idempotency** — first attempt succeeds `CreateNote`, fails `CreateNoteTarget` once; retry reuses the original Note (`CreateNote` count = 1, `CreateNoteTarget` count = 2), persists `CREATE_NOTE.externalId`, then completes link + remaining actions with no duplicate Note.
 - **Separate webhook events** — a second webhook for the same person is not suppressed by prior checkpoints.
 
 ## CRM failure semantics (production)
@@ -67,7 +68,7 @@ Also covered:
 
 ### Partial-success retry idempotency (production)
 
-`JobActionCheckpoint` records completed CRM writes per `(tenantId, webhookLogId, action)`. BullMQ retries skip already-checkpointed `UpdatePerson`, `CreateNote`, and `CreateOpportunity` for the same webhook event. See `docs/PLATFORM_SECURITY_HARDENING.md`.
+`JobActionCheckpoint` records completed CRM writes per `(tenantId, webhookLogId, action)`. BullMQ retries skip already-checkpointed `UpdatePerson`, `CreateNote`, `LinkNoteToPerson`, and `CreateOpportunity` for the same webhook event. Pinned Twenty note creation is two remote mutations (`createNote` → `createNoteTarget`); each has its own checkpoint so a failed link cannot duplicate Notes on retry. See `docs/PLATFORM_SECURITY_HARDENING.md`.
 
 ## What is real
 

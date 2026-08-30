@@ -88,7 +88,13 @@ export class FakeTwentyGraphqlServer {
   private failOnceOperations = new Map<GraphqlOperationName, number>();
   private requestOrder = 0;
   private noteCounter = 0;
+  private noteTargetCounter = 0;
   private oppCounter = 0;
+  private readonly notes = new Map<string, { id: string; title?: string; markdown?: string }>();
+  private readonly noteTargets = new Map<
+    string,
+    { id: string; noteId: string; targetPersonId: string }
+  >();
 
   seedPerson(person: FakePerson) {
     this.persons.set(person.id, { ...person });
@@ -125,7 +131,18 @@ export class FakeTwentyGraphqlServer {
     this.requests.length = 0;
     this.requestOrder = 0;
     this.noteCounter = 0;
+    this.noteTargetCounter = 0;
     this.oppCounter = 0;
+    this.notes.clear();
+    this.noteTargets.clear();
+  }
+
+  getNotes() {
+    return [...this.notes.values()];
+  }
+
+  getNoteTargets() {
+    return [...this.noteTargets.values()];
   }
 
   async waitForRequest(
@@ -295,21 +312,34 @@ export class FakeTwentyGraphqlServer {
 
     if (operation === 'CreateNote') {
       this.noteCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
+      const bodyV2 = (data.bodyV2 || {}) as Record<string, unknown>;
+      const id = `note_contract_${this.noteCounter}`;
+      this.notes.set(id, {
+        id,
+        title: typeof data.title === 'string' ? data.title : undefined,
+        markdown: typeof bodyV2.markdown === 'string' ? bodyV2.markdown : undefined,
+      });
       return {
         data: {
-          createNote: {
-            id: `note_contract_${this.noteCounter}`,
-          },
+          createNote: { id },
         },
       };
     }
 
     if (operation === 'CreateNoteTarget') {
+      this.noteTargetCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, unknown>;
+      const noteId = String(data.noteId || '');
+      const targetPersonId = String(data.targetPersonId || '');
+      if (!this.notes.has(noteId)) {
+        return { errors: [{ message: `Note ${noteId} not found for CreateNoteTarget` }] };
+      }
+      const id = `note_target_${this.noteTargetCounter}`;
+      this.noteTargets.set(id, { id, noteId, targetPersonId });
       return {
         data: {
-          createNoteTarget: {
-            id: `note_target_${this.noteCounter}`,
-          },
+          createNoteTarget: { id },
         },
       };
     }

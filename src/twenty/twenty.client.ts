@@ -5,6 +5,7 @@ import { mapTwentyPersonRecord } from './twenty-person.mapper';
 import { mapOpportunityStageToTwenty } from './twenty-stage.constants';
 import {
   CreateNoteInput,
+  CreateNoteTargetInput,
   CreateOpportunityInput,
   TwentyPerson,
   UpdatePersonInput,
@@ -140,10 +141,12 @@ export class TwentyClient {
     return data.createOpportunity;
   }
 
+  /**
+   * Create a Note record only. Linking to a Person is a separate irreversible
+   * mutation (`createNoteTarget`) — callers must checkpoint each step.
+   */
   async createNote(tenantId: string, input: CreateNoteInput): Promise<{ id: string }> {
-    const client = await this.clientFor(tenantId);
-
-    const createNoteMutation = gql`
+    const mutation = gql`
       mutation CreateNote($data: NoteCreateInput!) {
         createNote(data: $data) {
           id
@@ -151,7 +154,9 @@ export class TwentyClient {
       }
     `;
 
-    const noteResult = await client.request<{ createNote: { id: string } }>(createNoteMutation, {
+    const noteResult = await (
+      await this.clientFor(tenantId)
+    ).request<{ createNote: { id: string } }>(mutation, {
       data: {
         title: input.title || 'ZEX Automation',
         bodyV2: {
@@ -161,9 +166,12 @@ export class TwentyClient {
       },
     });
 
-    const noteId = noteResult.createNote.id;
+    return noteResult.createNote;
+  }
 
-    const createTargetMutation = gql`
+  /** Link an existing Note to a Person (pinned Twenty `createNoteTarget`). */
+  async createNoteTarget(tenantId: string, input: CreateNoteTargetInput): Promise<{ id: string }> {
+    const mutation = gql`
       mutation CreateNoteTarget($data: NoteTargetCreateInput!) {
         createNoteTarget(data: $data) {
           id
@@ -171,13 +179,15 @@ export class TwentyClient {
       }
     `;
 
-    await client.request(createTargetMutation, {
+    const result = await (
+      await this.clientFor(tenantId)
+    ).request<{ createNoteTarget: { id: string } }>(mutation, {
       data: {
-        noteId,
+        noteId: input.noteId,
         targetPersonId: input.personId,
       },
     });
 
-    return { id: noteId };
+    return result.createNoteTarget;
   }
 }

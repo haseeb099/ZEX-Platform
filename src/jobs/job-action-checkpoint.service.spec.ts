@@ -89,7 +89,13 @@ describe('JobActionCheckpointService', () => {
 
   it('does not cross tenants or webhook events', async () => {
     const { service, store } = buildService();
-    await service.recordSuccess(tenantId, webhookLogId, personId, CRM_WRITE_ACTIONS.CREATE_NOTE);
+    await service.recordSuccess(
+      tenantId,
+      webhookLogId,
+      personId,
+      CRM_WRITE_ACTIONS.CREATE_NOTE,
+      'note_1',
+    );
 
     await expect(
       service.getCompleted(tenantB, webhookLogId, CRM_WRITE_ACTIONS.CREATE_NOTE),
@@ -100,5 +106,35 @@ describe('JobActionCheckpointService', () => {
 
     expect(store.has(`${tenantId}:${webhookLogId}:create_note`)).toBe(true);
     expect(store.has(`${tenantB}:${webhookLogId}:create_note`)).toBe(false);
+  });
+
+  it('persists CREATE_NOTE and LINK_NOTE_TO_PERSON as independent actions', async () => {
+    const { service } = buildService();
+    await service.recordSuccess(
+      tenantId,
+      webhookLogId,
+      personId,
+      CRM_WRITE_ACTIONS.CREATE_NOTE,
+      'note_42',
+    );
+
+    await expect(
+      service.getCompleted(tenantId, webhookLogId, CRM_WRITE_ACTIONS.CREATE_NOTE),
+    ).resolves.toEqual({ completed: true, externalId: 'note_42' });
+    await expect(
+      service.getCompleted(tenantId, webhookLogId, CRM_WRITE_ACTIONS.LINK_NOTE_TO_PERSON),
+    ).resolves.toEqual({ completed: false });
+
+    await service.recordSuccess(
+      tenantId,
+      webhookLogId,
+      personId,
+      CRM_WRITE_ACTIONS.LINK_NOTE_TO_PERSON,
+      'note_42',
+    );
+
+    await expect(
+      service.getCompleted(tenantId, webhookLogId, CRM_WRITE_ACTIONS.LINK_NOTE_TO_PERSON),
+    ).resolves.toEqual({ completed: true, externalId: 'note_42' });
   });
 });
