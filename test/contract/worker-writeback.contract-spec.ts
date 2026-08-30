@@ -200,6 +200,8 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     serverB.clearRequests();
     serverA.clearFailedOperations();
     serverB.clearFailedOperations();
+    delete process.env.BULLMQ_ENRICH_ATTEMPTS;
+    delete process.env.BULLMQ_ENRICH_BACKOFF_MS;
   });
 
   function buildPayload(personId: string, overrides?: Record<string, unknown>) {
@@ -268,9 +270,11 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
           where: { tenantId: tenantAId, event: 'person.created' },
           orderBy: { createdAt: 'desc' },
         });
-        return log?.status === 'success';
+        if (log?.status !== 'success' || !log.jobId) return false;
+        const job = await queue.getJob(log.jobId);
+        return (await job?.getState()) === 'completed';
       },
-      { timeoutMs: 30000, label: 'WebhookLog success' },
+      { timeoutMs: 30000, label: 'WebhookLog success + BullMQ completed' },
     );
 
     const log = await prisma.webhookLog.findFirstOrThrow({
@@ -447,7 +451,11 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
     expect(serverA.getRequestsByOperation('CreateOpportunity')).toHaveLength(0);
   }, 60000);
 
-  it('documents current production policy: CRM write GraphQL errors are non-fatal (job still succeeds)', async () => {
+  it('fails the job when UpdatePerson GraphQL errors (no false success audit)', async () => {
+    // Terminal CRM failure without waiting through production 5× backoff:
+    // BULLMQ_ENRICH_ATTEMPTS=1 is a test-only timing override; production default remains 5.
+    process.env.BULLMQ_ENRICH_ATTEMPTS = '1';
+
     const personId = `person_worker_writefail_${Date.now()}`;
     serverA.seedPerson({
       id: personId,
@@ -473,17 +481,106 @@ describe('CRM contract: webhook → worker → CRM write-back', () => {
           where: { tenantId: tenantAId },
           orderBy: { createdAt: 'desc' },
         });
-        return log?.status === 'success';
+        if (!log?.jobId) return false;
+        const job = await queue.getJob(log.jobId);
+        return (await job?.getState()) === 'failed';
       },
-      { timeoutMs: 30000, label: 'WebhookLog success after write failure' },
+      { timeoutMs: 30000, label: 'BullMQ job failed after UpdatePerson error' },
     );
 
-    // Processor catches write-back errors and continues (warn + skip). Opportunity may still run.
+    delete process.env.BULLMQ_ENRICH_ATTEMPTS;
+
     expect(serverA.getRequestsByOperation('UpdatePerson').length).toBeGreaterThanOrEqual(1);
+    expect(serverA.getRequestsByOperation('CreateNote')).toHaveLength(0);
+    expect(serverA.getRequestsByOperation('CreateOpportunity')).toHaveLength(0);
+
     const log = await prisma.webhookLog.findFirstOrThrow({
       where: { tenantId: tenantAId },
       orderBy: { createdAt: 'desc' },
     });
-    expect(log.status).toBe('success');
+    expect(log.status).toBe('failed');
+    expect(log.error).toBeTruthy();
+    expect(log.processedAt).toBeNull();
+
+    const successAudit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: tenantAId,
+        resourceTwentyId: personId,
+        action: 'enrich_and_score_person',
+        success: true,
+      },
+    });
+    expect(successAudit).toBeNull();
+
+    const history = await prisma.scoreHistory.findFirst({
+      where: { tenantId: tenantAId, personTwentyId: personId },
+    });
+    expect(history).toBeNull();
+  }, 60000);
+
+  it('fails the job when CreateOpportunity GraphQL errors (no synthetic pending opportunity)', async () => {
+    process.env.BULLMQ_ENRICH_ATTEMPTS = '1';
+
+    const personId = `person_worker_oppfail_${Date.now()}`;
+    serverA.seedPerson({
+      id: personId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@acme.test',
+      jobTitle: 'Engineer',
+      updatedAt: new Date().toISOString(),
+    });
+    serverA.failOperation('CreateOpportunity');
+
+    const response = await postSignedWebhook(
+      tenantAId,
+      webhookSecretA,
+      buildPayload(personId),
+      `worker-oppfail-${personId}`,
+    );
+    expect(response.statusCode).toBe(200);
+
+    await waitForCondition(
+      async () => {
+        const log = await prisma.webhookLog.findFirst({
+          where: { tenantId: tenantAId },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!log?.jobId) return false;
+        const job = await queue.getJob(log.jobId);
+        return (await job?.getState()) === 'failed';
+      },
+      { timeoutMs: 30000, label: 'BullMQ job failed after CreateOpportunity error' },
+    );
+
+    delete process.env.BULLMQ_ENRICH_ATTEMPTS;
+
+    expect(serverA.getRequestsByOperation('UpdatePerson').length).toBeGreaterThanOrEqual(1);
+    expect(serverA.getRequestsByOperation('CreateNote').length).toBeGreaterThanOrEqual(1);
+    expect(serverA.getRequestsByOperation('CreateOpportunity').length).toBeGreaterThanOrEqual(1);
+
+    const log = await prisma.webhookLog.findFirstOrThrow({
+      where: { tenantId: tenantAId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(log.status).toBe('failed');
+    expect(log.error).toBeTruthy();
+
+    const history = await prisma.scoreHistory.findFirst({
+      where: { tenantId: tenantAId, personTwentyId: personId },
+    });
+    expect(history).toBeNull();
+
+    const successAudit = await prisma.auditLog.findFirst({
+      where: {
+        tenantId: tenantAId,
+        resourceTwentyId: personId,
+        success: true,
+      },
+    });
+    expect(successAudit).toBeNull();
+    expect(
+      JSON.stringify(await prisma.scoreHistory.findMany({ where: { tenantId: tenantAId } })),
+    ).not.toContain('pending-twenty-');
   }, 60000);
 });

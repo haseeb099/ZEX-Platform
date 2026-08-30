@@ -53,8 +53,19 @@ Observed CRM operations (success path):
 Also covered:
 
 - **Worker tenant isolation** — Tenant A processing never hits Tenant B’s fake server/key (and the reverse).
-- **Failure path** — controlled enrichment throws BullMQ `UnrecoverableError` → job `failed`, `WebhookLog.status=failed`, no success audit, no CRM write mutations. Uses `UnrecoverableError` so CI does not wait through production’s 5× exponential backoff; production retry/backoff options on the webhook-enqueued job are unchanged.
-- **Write-error policy (documented)** — GraphQL errors on `UpdatePerson` are currently non-fatal in `EnrichAndScoreProcessor` (warn + continue); job still reaches `success`. This asserts actual production behavior, not a forced fail.
+- **Enrichment failure** — controlled enrichment throws BullMQ `UnrecoverableError` → job `failed`, `WebhookLog.status=failed`, no success audit, no CRM write mutations. Uses `UnrecoverableError` so CI does not wait through production’s 5× exponential backoff; production retry/backoff options on the webhook-enqueued job are unchanged when env overrides are unset.
+- **CRM write failure** — fake Twenty fails `UpdatePerson` or `CreateOpportunity` → error propagates → BullMQ job fails → `WebhookLog` failed → **no** `AuditLog.success=true` → **no** `ScoreHistory` / synthetic `pending-twenty-*` opportunity ids → no further mutations after the failed write. Contract tests set `BULLMQ_ENRICH_ATTEMPTS=1` for terminal assertions only; production default remains 5 attempts / 2000ms exponential backoff.
+
+## CRM failure semantics (production)
+
+- `GetPerson` failures **propagate** by default (BullMQ retries). Snapshot fallback requires explicit `ALLOW_TWENTY_SNAPSHOT_FALLBACK=true` (default `false`).
+- `UpdatePerson` / `CreateNote` failures **propagate** (no warn-and-continue).
+- When auto-opportunity is required, `CreateOpportunity` failures **propagate**. `opportunityCreated` is true only after Twenty returns a real opportunity id — never a synthetic `pending-twenty-*` id.
+- `AuditLog` with `success: true` is written only after required CRM writes succeed.
+
+### Known follow-up: partial-success retry idempotency
+
+If `UpdatePerson` and `CreateNote` succeed but `CreateOpportunity` fails, a BullMQ retry may re-attempt earlier writes. Full write-action idempotency across partial success is an **operational-hardening** follow-up and is not solved in this suite.
 
 ## What is real
 
@@ -78,7 +89,7 @@ Also covered:
 - Live GraphQL schema compatibility with a pinned ZEX-CRM/Twenty upstream version
 - Real Twenty migrations / ZEX App integration
 - Staging networking and auth configuration against a real pinned CRM instance
-- That CRM write GraphQL failures fail the job (they currently do not — by design in the processor)
+- Idempotent CRM write-actions across partial-success retries
 
 Those remain follow-ups (staging against pinned ZEX-CRM recommended).
 
