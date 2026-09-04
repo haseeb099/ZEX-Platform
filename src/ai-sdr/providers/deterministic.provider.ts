@@ -43,7 +43,10 @@ export class DeterministicOutboundProvider implements OutboundMessageProvider {
     }
 
     // Hash full key so distinct sends get distinct providerMessageIds (prefix slice collided).
-    const digest = createHash('sha256').update(input.idempotencyKey, 'utf8').digest('hex').slice(0, 24);
+    const digest = createHash('sha256')
+      .update(input.idempotencyKey, 'utf8')
+      .digest('hex')
+      .slice(0, 24);
     const result: OutboundSendResult = {
       provider: this.name,
       providerMessageId: `det-msg-${digest}`,
