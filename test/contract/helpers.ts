@@ -104,6 +104,8 @@ export async function deleteTenantCascade(prisma: PrismaService, tenantId: strin
   await prisma.enrichedPerson.deleteMany({ where: { tenantId } });
   await prisma.enrichmentProvider.deleteMany({ where: { tenantId } });
   await prisma.scoringRule.deleteMany({ where: { tenantId } });
+  await prisma.prospectResearchFinding.deleteMany({ where: { tenantId } });
+  await prisma.prospectResearchRun.deleteMany({ where: { tenantId } });
   await prisma.prospectScoreSnapshot.deleteMany({ where: { tenantId } });
   await prisma.prospectSignal.deleteMany({ where: { tenantId } });
   await prisma.prospectCandidate.deleteMany({ where: { tenantId } });

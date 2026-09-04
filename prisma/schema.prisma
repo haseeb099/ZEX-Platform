@@ -35,6 +35,7 @@ model Tenant {
   twentyConnection     TwentyConnection?
   companyBrains        CompanyBrain[]
   prospectDiscoveryRuns ProspectDiscoveryRun[]
+  prospectResearchRuns  ProspectResearchRun[]
 
   @@index([slug])
   @@index([status])
@@ -304,6 +305,8 @@ model ProspectCandidate {
   updatedAt              DateTime             @updatedAt
   signals                ProspectSignal[]
   scoreSnapshots         ProspectScoreSnapshot[]
+  researchRuns           ProspectResearchRun[]
+  researchFindings       ProspectResearchFinding[]
 
   @@index([tenantId, discoveryRunId])
   @@index([tenantId, status])
@@ -363,6 +366,74 @@ model ProspectScoreSnapshot {
 
   @@index([tenantId, prospectCandidateId, createdAt])
   @@index([tenantId, createdAt])
+}
+
+/// Research Agent run — Platform-owned; never writes CRM (ZEX-35).
+model ProspectResearchRun {
+  id                   String                   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prospectCandidateId  String
+  prospectCandidate    ProspectCandidate        @relation(fields: [prospectCandidateId], references: [id], onDelete: Cascade)
+  /// QUEUED | PROCESSING | COMPLETED | FAILED | BLOCKED
+  status               String                   @default("QUEUED")
+  provider             String?
+  requestedAt          DateTime                 @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  error                String?
+  triggeredBy          String?
+  researchVersion      String                   @default("research-agent-v1")
+  /// Structured research package snapshot (self-contained history)
+  package              Json?
+  confidence           Float?
+  whyNowSnapshotId     String?
+  findingCount         Int                      @default(0)
+  fixture              String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  findings             ProspectResearchFinding[]
+
+  @@index([tenantId, prospectCandidateId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+/// Source-backed research finding — provenance required; deduped across runs.
+model ProspectResearchFinding {
+  id                   String              @id @default(cuid())
+  tenantId             String
+  researchRunId        String
+  researchRun          ProspectResearchRun @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  prospectCandidateId  String
+  prospectCandidate    ProspectCandidate   @relation(fields: [prospectCandidateId], references: [id], onDelete: Cascade)
+  findingType          String
+  title                String
+  summary              String
+  claim                String
+  sourceUrl            String?
+  sourceTitle          String?
+  sourceType           String?
+  excerpt              String?
+  occurredAt           DateTime?
+  publishedAt          DateTime?
+  observedAt           DateTime            @default(now())
+  confidence           Float               @default(0.5)
+  relevance            Float               @default(0.5)
+  /// EXPLICIT | INFERRED
+  evidenceType         String              @default("EXPLICIT")
+  /// Optional named person — only when source explicitly supports it
+  personName           String?
+  personRole           String?
+  stale                Boolean             @default(false)
+  providerKey          String?
+  dedupeKey            String
+  createdAt            DateTime            @default(now())
+
+  @@unique([tenantId, dedupeKey])
+  @@index([tenantId, prospectCandidateId])
+  @@index([tenantId, researchRunId])
+  @@index([tenantId, findingType])
 }
 
 /// Persistent CRM write checkpoints for enrich-and-score job retries.

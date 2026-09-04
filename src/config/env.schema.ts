@@ -45,6 +45,8 @@ export const envSchema = Joi.object({
   PROSPECT_DISCOVERY_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   /** Force deterministic Why-Now signal provider (also preferred in NODE_ENV=test). */
   WHY_NOW_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** Force deterministic Research Agent provider (also preferred in NODE_ENV=test). */
+  RESEARCH_AGENT_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   /** Optional future LLM credentials — unused by deterministic analyzer. */
   OPENAI_API_KEY: Joi.string().allow('').optional(),
 });

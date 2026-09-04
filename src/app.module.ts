@@ -17,6 +17,7 @@ import { TenantsModule } from './tenants/tenants.module';
 import { TwentyModule } from './twenty/twenty.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhyNowModule } from './why-now/why-now.module';
+import { ResearchAgentModule } from './research-agent/research-agent.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { WhyNowModule } from './why-now/why-now.module';
     CompanyBrainModule,
     ProspectDiscoveryModule,
     WhyNowModule,
+    ResearchAgentModule,
   ],
   providers: [
     {
