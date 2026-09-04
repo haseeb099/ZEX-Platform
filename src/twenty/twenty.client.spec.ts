@@ -29,6 +29,9 @@ describe('TwentyClient', () => {
     expect(typeof client.createOpportunity).toBe('function');
     expect(typeof client.createNote).toBe('function');
     expect(typeof client.createNoteTarget).toBe('function');
+    expect(typeof client.findCompaniesByDomain).toBe('function');
+    expect(typeof client.findCompaniesByName).toBe('function');
+    expect(typeof client.createCompany).toBe('function');
 
     const sample: TwentyPerson = { id: 'person_1', email: 'a@b.com' };
     expect(sample.id).toBe('person_1');

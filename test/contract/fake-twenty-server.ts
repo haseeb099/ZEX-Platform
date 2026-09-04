@@ -13,6 +13,9 @@ export type GraphqlOperationName =
   | 'CreateNote'
   | 'CreateNoteTarget'
   | 'CreateOpportunity'
+  | 'FindCompaniesByDomain'
+  | 'FindCompaniesByName'
+  | 'CreateCompany'
   | 'Unknown';
 
 export function toPinnedPersonResponse(person: FakePerson) {
@@ -48,6 +51,11 @@ export function classifyGraphqlOperation(query: string): GraphqlOperationName {
   if (query.includes('createNoteTarget')) return 'CreateNoteTarget';
   if (query.includes('createNote')) return 'CreateNote';
   if (query.includes('createOpportunity')) return 'CreateOpportunity';
+  if (query.includes('createCompany')) return 'CreateCompany';
+  if (query.includes('FindCompaniesByDomain')) return 'FindCompaniesByDomain';
+  if (query.includes('FindCompaniesByName')) return 'FindCompaniesByName';
+  if (/\bcompanies\s*\(/.test(query) && /domainName/.test(query)) return 'FindCompaniesByDomain';
+  if (/\bcompanies\s*\(/.test(query)) return 'FindCompaniesByName';
   return 'Unknown';
 }
 
@@ -72,6 +80,12 @@ export type FakePerson = {
   company?: { id: string; name?: string; website?: string } | null;
 };
 
+export type FakeCompany = {
+  id: string;
+  name: string;
+  website?: string | null;
+};
+
 async function sleep(ms: number) {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -84,12 +98,14 @@ export class FakeTwentyGraphqlServer {
   private server: http.Server | null = null;
   private readonly requests: CapturedGraphqlRequest[] = [];
   private persons = new Map<string, FakePerson>();
+  private companies = new Map<string, FakeCompany>();
   private failOperations = new Set<GraphqlOperationName>();
   private failOnceOperations = new Map<GraphqlOperationName, number>();
   private requestOrder = 0;
   private noteCounter = 0;
   private noteTargetCounter = 0;
   private oppCounter = 0;
+  private companyCounter = 0;
   private readonly notes = new Map<string, { id: string; title?: string; markdown?: string }>();
   private readonly noteTargets = new Map<
     string,
@@ -98,6 +114,21 @@ export class FakeTwentyGraphqlServer {
 
   seedPerson(person: FakePerson) {
     this.persons.set(person.id, { ...person });
+    if (person.company?.id) {
+      this.seedCompany({
+        id: person.company.id,
+        name: person.company.name ?? person.company.id,
+        website: person.company.website ?? null,
+      });
+    }
+  }
+
+  seedCompany(company: FakeCompany) {
+    this.companies.set(company.id, { ...company });
+  }
+
+  getCompanies() {
+    return [...this.companies.values()];
   }
 
   /** Cause the next matching operation(s) to return a GraphQL error until cleared. */
@@ -133,6 +164,7 @@ export class FakeTwentyGraphqlServer {
     this.noteCounter = 0;
     this.noteTargetCounter = 0;
     this.oppCounter = 0;
+    this.companyCounter = 0;
     this.notes.clear();
     this.noteTargets.clear();
   }
@@ -340,6 +372,66 @@ export class FakeTwentyGraphqlServer {
       return {
         data: {
           createNoteTarget: { id },
+        },
+      };
+    }
+
+    if (operation === 'FindCompaniesByDomain' || operation === 'FindCompaniesByName') {
+      const filter = (variables.filter || {}) as Record<string, any>;
+      const domainNeedle = String(
+        filter.domainName?.primaryLinkUrl?.ilike || filter.domainName?.primaryLinkUrl?.eq || '',
+      )
+        .replace(/%/g, '')
+        .toLowerCase();
+      const nameNeedle = String(filter.name?.ilike || filter.name?.eq || '')
+        .replace(/%/g, '')
+        .toLowerCase();
+
+      const matches = [...this.companies.values()].filter(c => {
+        const website = (c.website || '').toLowerCase();
+        const name = (c.name || '').toLowerCase();
+        if (operation === 'FindCompaniesByDomain') {
+          return domainNeedle ? website.includes(domainNeedle) : false;
+        }
+        return nameNeedle ? name.includes(nameNeedle) : false;
+      });
+
+      return {
+        data: {
+          companies: {
+            edges: matches.map(c => ({
+              node: {
+                id: c.id,
+                name: c.name,
+                domainName: c.website ? { primaryLinkUrl: c.website } : null,
+              },
+            })),
+          },
+        },
+      };
+    }
+
+    if (operation === 'CreateCompany') {
+      this.companyCounter += 1;
+      const data = (variables.data || variables.input || {}) as Record<string, any>;
+      const id = `company_contract_${this.companyCounter}`;
+      const website =
+        data.domainName?.primaryLinkUrl ||
+        (typeof data.domain === 'string' ? data.domain : null) ||
+        null;
+      const company: FakeCompany = {
+        id,
+        name: String(data.name || 'Company'),
+        website,
+      };
+      this.companies.set(id, company);
+      return {
+        data: {
+          createCompany: {
+            id: company.id,
+            name: company.name,
+            domainName: company.website ? { primaryLinkUrl: company.website } : null,
+          },
         },
       };
     }

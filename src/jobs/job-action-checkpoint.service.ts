@@ -9,6 +9,8 @@ export const CRM_WRITE_ACTIONS = {
   /** Links an existing Note to a Person via createNoteTarget (separate from CREATE_NOTE). */
   LINK_NOTE_TO_PERSON: 'link_note_to_person',
   CREATE_OPPORTUNITY: 'create_opportunity',
+  /** Prospect Discovery: create Twenty Company for an approved candidate. */
+  CREATE_COMPANY: 'create_company',
 } as const;
 
 export type CrmWriteAction = (typeof CRM_WRITE_ACTIONS)[keyof typeof CRM_WRITE_ACTIONS];

@@ -34,6 +34,7 @@ model Tenant {
   scoreHistory         ScoreHistory[]
   twentyConnection     TwentyConnection?
   companyBrains        CompanyBrain[]
+  prospectDiscoveryRuns ProspectDiscoveryRun[]
 
   @@index([slug])
   @@index([status])
@@ -249,6 +250,62 @@ model CompanyBrainAnalysisJob {
 
   @@index([tenantId, companyBrainId])
   @@index([status])
+}
+
+/// Prospect Discovery run driven by a Company Brain (ZEX-Platform owned until approval).
+model ProspectDiscoveryRun {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  companyBrainId String
+  /// queued | processing | completed | failed
+  status         String   @default("queued")
+  provider       String?
+  error          String?
+  requestedAt    DateTime @default(now())
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  candidates     ProspectCandidate[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([companyBrainId])
+}
+
+/// Proposed prospect company — Platform-owned until explicitly approved for CRM write.
+model ProspectCandidate {
+  id                     String               @id @default(cuid())
+  tenantId               String
+  discoveryRunId         String
+  discoveryRun           ProspectDiscoveryRun @relation(fields: [discoveryRunId], references: [id], onDelete: Cascade)
+  providerKey            String?
+  companyName            String
+  domain                 String?
+  websiteUrl             String?
+  industry               String?
+  companySize            String?
+  geography              String?
+  description            String?
+  fitScore               Int                  @default(0)
+  fitBand                String               @default("unknown")
+  fitReasons             Json?
+  disqualifiers          Json?
+  /// PROPOSED | DUPLICATE | APPROVED | REJECTED | CREATED | FAILED
+  status                 String               @default("PROPOSED")
+  /// NEW | EXACT_MATCH | POSSIBLE_MATCH
+  dedupeStatus           String               @default("NEW")
+  existingTwentyCompanyId String?
+  createdTwentyCompanyId  String?
+  evidence               Json?
+  buyerRoles             Json?
+  lastError              String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  @@index([tenantId, discoveryRunId])
+  @@index([tenantId, status])
+  @@index([domain])
 }
 
 /// Persistent CRM write checkpoints for enrich-and-score job retries.
