@@ -302,10 +302,67 @@ model ProspectCandidate {
   lastError              String?
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
+  signals                ProspectSignal[]
+  scoreSnapshots         ProspectScoreSnapshot[]
 
   @@index([tenantId, discoveryRunId])
   @@index([tenantId, status])
   @@index([domain])
+}
+
+/// Typed intent/timing signal for Why-Now scoring (Platform-owned, provenance-backed).
+model ProspectSignal {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  prospectCandidateId  String
+  prospectCandidate    ProspectCandidate @relation(fields: [prospectCandidateId], references: [id], onDelete: Cascade)
+  signalType           String
+  category             String
+  title                String
+  summary              String?
+  source               String
+  sourceUrl            String?
+  occurredAt           DateTime
+  observedAt           DateTime          @default(now())
+  /// 0–1 source confidence
+  confidence           Float             @default(0.5)
+  /// 0–1 relevance to ICP / product
+  relevance            Float             @default(0.5)
+  evidence             Json?
+  providerKey          String?
+  /// Stable idempotency key (tenant+candidate+type+source+occurredAt+content)
+  dedupeKey            String
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@unique([tenantId, dedupeKey])
+  @@index([tenantId, prospectCandidateId])
+  @@index([tenantId, signalType])
+  @@index([occurredAt])
+}
+
+/// Immutable Why-Now score snapshot — rescoring appends; history retained.
+model ProspectScoreSnapshot {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  prospectCandidateId  String
+  prospectCandidate    ProspectCandidate @relation(fields: [prospectCandidateId], references: [id], onDelete: Cascade)
+  fitScore             Int
+  intentScore          Int
+  timingScore          Int
+  overallScore         Int
+  /// 0–1 confidence (distinct from overallScore)
+  confidence           Float
+  whyNow               String
+  fitReasons           Json?
+  intentReasons        Json?
+  timingReasons        Json?
+  signalIds            Json?
+  scoringVersion       String            @default("why-now-v1")
+  createdAt            DateTime          @default(now())
+
+  @@index([tenantId, prospectCandidateId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 /// Persistent CRM write checkpoints for enrich-and-score job retries.

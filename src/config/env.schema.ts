@@ -43,6 +43,8 @@ export const envSchema = Joi.object({
   /** Force deterministic Company Brain analyzer (also default in NODE_ENV=test). */
   COMPANY_BRAIN_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   PROSPECT_DISCOVERY_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** Force deterministic Why-Now signal provider (also preferred in NODE_ENV=test). */
+  WHY_NOW_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   /** Optional future LLM credentials — unused by deterministic analyzer. */
   OPENAI_API_KEY: Joi.string().allow('').optional(),
 });

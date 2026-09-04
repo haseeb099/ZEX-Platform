@@ -16,6 +16,7 @@ import { ScoringModule } from './scoring/scoring.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TwentyModule } from './twenty/twenty.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { WhyNowModule } from './why-now/why-now.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     AuditModule,
     CompanyBrainModule,
     ProspectDiscoveryModule,
+    WhyNowModule,
   ],
   providers: [
     {
