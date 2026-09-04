@@ -68,14 +68,20 @@ export class AiSdrController {
     return this.sdr.sendDraft(tenantId, draftId, dto);
   }
 
-  /** Deterministic/admin reply ingestion (also available via signed webhook). */
+  /**
+   * Trusted admin/deterministic reply ingestion (Admin API key).
+   * Sequence is taken from the path; optional providerMessageId must match that sequence when supplied.
+   * External providers must use the signed webhook (requires providerMessageId).
+   */
   @Post('sdr/sequences/:sequenceId/replies')
   reply(
     @Param('tenantId') tenantId: string,
     @Param('sequenceId') sequenceId: string,
     @Body() dto: IngestReplyDto,
   ) {
-    return this.sdr.ingestReply(tenantId, { ...dto, sequenceId, tenantId });
+    return this.sdr.ingestReply(tenantId, { ...dto, sequenceId, tenantId }, 'admin-api', {
+      source: 'admin',
+    });
   }
 
   @Post('sdr/sequences/:sequenceId/meetings/confirm')

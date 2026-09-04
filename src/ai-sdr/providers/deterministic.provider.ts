@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import {
   MeetingConfirmInput,
@@ -41,9 +42,11 @@ export class DeterministicOutboundProvider implements OutboundMessageProvider {
       throw new Error('Deterministic outbound permanent failure');
     }
 
+    // Hash full key so distinct sends get distinct providerMessageIds (prefix slice collided).
+    const digest = createHash('sha256').update(input.idempotencyKey, 'utf8').digest('hex').slice(0, 24);
     const result: OutboundSendResult = {
       provider: this.name,
-      providerMessageId: `det-msg-${input.idempotencyKey.slice(0, 24)}`,
+      providerMessageId: `det-msg-${digest}`,
     };
     this.sentByKey.set(input.idempotencyKey, result);
     return result;

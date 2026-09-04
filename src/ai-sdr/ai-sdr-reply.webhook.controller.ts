@@ -51,8 +51,15 @@ export class AiSdrReplyWebhookController {
     const tenantId = String(payload.tenantId || '');
     if (!tenantId) throw new BadRequestException('tenantId required');
 
+    // External path must correlate via providerMessageId — never stop a sequence from sequenceId alone.
+    if (!payload.providerMessageId || typeof payload.providerMessageId !== 'string') {
+      throw new BadRequestException('providerMessageId required');
+    }
+
     // ACK-style: process synchronously for v1 (small payload); idempotent by providerEventId
-    const result = await this.sdr.ingestReply(tenantId, payload, 'sdr-reply-webhook');
+    const result = await this.sdr.ingestReply(tenantId, payload, 'sdr-reply-webhook', {
+      source: 'webhook',
+    });
     return { status: 'ok', duplicate: result.duplicate, replyId: result.reply.id };
   }
 }

@@ -16,6 +16,7 @@ import { PrismaService } from '@src/common/prisma/prisma.service';
 import { CompanyBrainModule } from '@src/company-brain/company-brain.module';
 import { envSchema } from '@src/config/env.schema';
 import { AI_SDR_CRM_SYNC_QUEUE, AI_SDR_SEND_QUEUE } from '@src/jobs/jobs.constants';
+import { CRM_WRITE_ACTIONS } from '@src/jobs/job-action-checkpoint.service';
 import { ProspectDiscoveryModule } from '@src/prospect-discovery/prospect-discovery.module';
 import { ResearchAgentModule } from '@src/research-agent/research-agent.module';
 import { TwentyClient } from '@src/twenty/twenty.client';
@@ -171,15 +172,15 @@ describe('AI SDR contract (ZEX-36)', () => {
     return { statusCode: res.statusCode, body: res.json() as Record<string, unknown> };
   }
 
-  async function prepareApprovedResearchedCandidate() {
-    const brain = await admin('POST', `/api/v1/admin/tenants/${tenantA}/company-brain`, {
+  async function prepareApprovedResearchedCandidate(tenantId: string = tenantA) {
+    const brain = await admin('POST', `/api/v1/admin/tenants/${tenantId}/company-brain`, {
       companyName: 'ZEX Platform',
       pastedText: BRAIN_TEXT,
       analyze: true,
       sync: true,
     });
     expect(brain.statusCode).toBeLessThan(300);
-    const discover = await admin('POST', `/api/v1/admin/tenants/${tenantA}/prospect-discovery`, {
+    const discover = await admin('POST', `/api/v1/admin/tenants/${tenantId}/prospect-discovery`, {
       companyBrainId: brain.body.id,
       sync: true,
     });
@@ -187,20 +188,65 @@ describe('AI SDR contract (ZEX-36)', () => {
       (discover.body.candidates as Array<{ id: string; providerKey?: string }>) || [];
     const strong = candidates.find(c => c.providerKey === 'det_strong_fit');
     expect(strong).toBeTruthy();
-    await admin('POST', `/api/v1/admin/tenants/${tenantA}/prospects/${strong!.id}/why-now`, {
+    await admin('POST', `/api/v1/admin/tenants/${tenantId}/prospects/${strong!.id}/why-now`, {
       sync: true,
       collectSignals: true,
       fixture: 'strong_why_now',
     });
     await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantA}/prospect-discovery/candidates/${strong!.id}/approve`,
+      `/api/v1/admin/tenants/${tenantId}/prospect-discovery/candidates/${strong!.id}/approve`,
     );
-    await admin('POST', `/api/v1/admin/tenants/${tenantA}/prospects/${strong!.id}/research`, {
+    await admin('POST', `/api/v1/admin/tenants/${tenantId}/prospects/${strong!.id}/research`, {
       sync: true,
       fixture: 'strong_research',
     });
     return strong!.id;
+  }
+
+  async function createApprovedSentSequence(
+    tenantId: string,
+    candidateId: string,
+    email: string,
+  ): Promise<{ sequenceId: string; providerMessageId: string; draftId: string }> {
+    const created = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantId}/prospects/${candidateId}/sdr`,
+      {
+        targetEmail: email,
+        generateDraft: true,
+      },
+    );
+    expect(created.statusCode).toBeLessThan(300);
+    const sequenceId = String((created.body.sequence as { id: string }).id);
+    const draftId = String((created.body.draft as { id: string }).id);
+    await admin('POST', `/api/v1/admin/tenants/${tenantId}/sdr/drafts/${draftId}/approve`, {
+      approvedBy: 'reviewer',
+    });
+    const sent = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantId}/sdr/drafts/${draftId}/send`,
+      {
+        sync: true,
+        fixture: 'success',
+      },
+    );
+    expect(sent.statusCode).toBeLessThan(300);
+    expect(sent.body.providerMessageId).toBeTruthy();
+    return {
+      sequenceId,
+      providerMessageId: String(sent.body.providerMessageId),
+      draftId,
+    };
+  }
+
+  function signSdrReplyWebhook(body: string, timestamp: string): string {
+    return (
+      'sha256=' +
+      createHmac('sha256', process.env.SDR_REPLY_WEBHOOK_SECRET!)
+        .update(`${timestamp}:${body}`, 'utf8')
+        .digest('hex')
+    );
   }
 
   it('end-to-end approval-first SDR + negative gates', async () => {
@@ -383,24 +429,68 @@ describe('AI SDR contract (ZEX-36)', () => {
         'x-zex-sdr-signature': 'sha256=deadbeef',
         'x-zex-sdr-timestamp': String(Math.floor(Date.now() / 1000)),
       },
-      payload: { tenantId: tenantA, providerEventId: 'x', sequenceId },
+      payload: {
+        tenantId: tenantA,
+        providerEventId: 'x',
+        providerMessageId: String(sent.body.providerMessageId),
+        sequenceId,
+      },
     });
     expect(badHook.statusCode).toBe(401);
 
-    // Good signature webhook idempotent
+    // Stale timestamp → rejected (401 via verifyReplySignature)
+    const stalePayload = JSON.stringify({
+      tenantId: tenantA,
+      providerEventId: `evt-stale-${Date.now()}`,
+      providerMessageId: String(sent.body.providerMessageId),
+      classification: 'QUESTION',
+    });
+    const staleTs = String(Math.floor(Date.now() / 1000) - 10 * 60);
+    const staleHook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/outbound/reply',
+      headers: {
+        'content-type': 'application/json',
+        'x-zex-sdr-signature': signSdrReplyWebhook(stalePayload, staleTs),
+        'x-zex-sdr-timestamp': staleTs,
+      },
+      payload: stalePayload,
+    });
+    expect(staleHook.statusCode).toBe(401);
+
+    // Sequence-only signed webhook → rejected (must have providerMessageId)
+    const seqOnlyPayload = JSON.stringify({
+      tenantId: tenantA,
+      providerEventId: `evt-seq-only-${Date.now()}`,
+      sequenceId,
+      classification: 'QUESTION',
+      bodySummary: 'What pricing?',
+    });
+    const seqOnlyTs = String(Math.floor(Date.now() / 1000));
+    const seqOnlyHook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/outbound/reply',
+      headers: {
+        'content-type': 'application/json',
+        'x-zex-sdr-signature': signSdrReplyWebhook(seqOnlyPayload, seqOnlyTs),
+        'x-zex-sdr-timestamp': seqOnlyTs,
+      },
+      payload: seqOnlyPayload,
+    });
+    expect(seqOnlyHook.statusCode).toBe(400);
+
+    // Valid correlated webhook + duplicate providerEventId → idempotent
+    const hookEventId = `evt-hook-${Date.now()}`;
     const payload = JSON.stringify({
       tenantId: tenantA,
-      providerEventId: `evt-hook-${Date.now()}`,
+      providerEventId: hookEventId,
+      providerMessageId: String(sent.body.providerMessageId),
       sequenceId,
       classification: 'QUESTION',
       bodySummary: 'What pricing?',
     });
     const ts = String(Math.floor(Date.now() / 1000));
-    const sig =
-      'sha256=' +
-      createHmac('sha256', process.env.SDR_REPLY_WEBHOOK_SECRET!)
-        .update(`${ts}:${payload}`, 'utf8')
-        .digest('hex');
+    const sig = signSdrReplyWebhook(payload, ts);
     const okHook = await app.inject({
       method: 'POST',
       url: '/api/v1/webhooks/outbound/reply',
@@ -412,6 +502,22 @@ describe('AI SDR contract (ZEX-36)', () => {
       payload,
     });
     expect(okHook.statusCode).toBe(200);
+    const okBody = okHook.json() as { duplicate: boolean; replyId: string };
+    expect(okBody.duplicate).toBe(false);
+
+    const dupHook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/outbound/reply',
+      headers: {
+        'content-type': 'application/json',
+        'x-zex-sdr-signature': sig,
+        'x-zex-sdr-timestamp': ts,
+      },
+      payload,
+    });
+    expect(dupHook.statusCode).toBe(200);
+    expect((dupHook.json() as { duplicate: boolean }).duplicate).toBe(true);
+    expect((dupHook.json() as { replyId: string }).replyId).toBe(okBody.replyId);
 
     // Unsubscribe stops
     const unsubCand = await prepareApprovedResearchedCandidate();
@@ -458,5 +564,121 @@ describe('AI SDR contract (ZEX-36)', () => {
     for (const spy of mutationSpies) {
       expect(spy).not.toHaveBeenCalled();
     }
+  }, 180000);
+
+  it('reply correlation fail-closed (mismatch / unknown / cross-tenant)', async () => {
+    outbound.reset();
+    const candidateId = await prepareApprovedResearchedCandidate();
+    const seqA = await createApprovedSentSequence(tenantA, candidateId, 'corr-a@example.test');
+    const seqB = await createApprovedSentSequence(tenantA, candidateId, 'corr-b@example.test');
+
+    const statusOf = async (sequenceId: string) => {
+      const s = await prisma.sdrSequence.findUniqueOrThrow({ where: { id: sequenceId } });
+      return s.status;
+    };
+    const replyCount = async (sequenceId: string) =>
+      prisma.sdrReply.count({ where: { tenantId: tenantA, sequenceId } });
+    const draftCount = async (sequenceId: string) =>
+      prisma.sdrDraft.count({ where: { tenantId: tenantA, sequenceId } });
+
+    const beforeA = await statusOf(seqA.sequenceId);
+    const beforeB = await statusOf(seqB.sequenceId);
+    const repliesBeforeA = await replyCount(seqA.sequenceId);
+
+    // Valid correlation: Sequence A + providerMessageId from A
+    const valid = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/sdr/sequences/${seqA.sequenceId}/replies`,
+      {
+        providerEventId: `corr-valid-${Date.now()}`,
+        providerMessageId: seqA.providerMessageId,
+        classification: 'POSITIVE',
+        bodySummary: 'Yes lets talk',
+      },
+    );
+    expect(valid.statusCode).toBeLessThan(300);
+    expect(valid.body.sequenceStatus).toBe('REPLIED');
+    expect(await statusOf(seqA.sequenceId)).toBe('REPLIED');
+    expect(await statusOf(seqB.sequenceId)).toBe(beforeB);
+    expect(await replyCount(seqA.sequenceId)).toBe(repliesBeforeA + 1);
+    expect(beforeA).toBe('ACTIVE');
+
+    // Fresh pair for mismatch (both still ACTIVE)
+    const seqC = await createApprovedSentSequence(tenantA, candidateId, 'corr-c@example.test');
+    const seqD = await createApprovedSentSequence(tenantA, candidateId, 'corr-d@example.test');
+    const beforeC = await statusOf(seqC.sequenceId);
+    const beforeD = await statusOf(seqD.sequenceId);
+    const repliesBeforeC = await replyCount(seqC.sequenceId);
+    const repliesBeforeD = await replyCount(seqD.sequenceId);
+    const draftsBeforeC = await draftCount(seqC.sequenceId);
+    const draftsBeforeD = await draftCount(seqD.sequenceId);
+    const notesBeforeMismatch = await prisma.jobActionCheckpoint.count({
+      where: { tenantId: tenantA, action: CRM_WRITE_ACTIONS.CREATE_NOTE },
+    });
+
+    // Mismatch: Sequence C ID + providerMessageId from Sequence D
+    const mismatch = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/sdr/sequences/${seqC.sequenceId}/replies`,
+      {
+        providerEventId: `corr-mismatch-${Date.now()}`,
+        providerMessageId: seqD.providerMessageId,
+        classification: 'POSITIVE',
+        bodySummary: 'should not land',
+      },
+    );
+    expect(mismatch.statusCode).toBe(400);
+    expect(await statusOf(seqC.sequenceId)).toBe(beforeC);
+    expect(await statusOf(seqD.sequenceId)).toBe(beforeD);
+    expect(await replyCount(seqC.sequenceId)).toBe(repliesBeforeC);
+    expect(await replyCount(seqD.sequenceId)).toBe(repliesBeforeD);
+    expect(await draftCount(seqC.sequenceId)).toBe(draftsBeforeC);
+    expect(await draftCount(seqD.sequenceId)).toBe(draftsBeforeD);
+    expect(
+      await prisma.jobActionCheckpoint.count({
+        where: { tenantId: tenantA, action: CRM_WRITE_ACTIONS.CREATE_NOTE },
+      }),
+    ).toBe(notesBeforeMismatch);
+
+    // Unknown providerMessageId
+    const unknown = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/sdr/sequences/${seqC.sequenceId}/replies`,
+      {
+        providerEventId: `corr-unknown-${Date.now()}`,
+        providerMessageId: 'det-msg-does-not-exist-zzzz',
+        classification: 'QUESTION',
+      },
+    );
+    expect(unknown.statusCode).toBe(404);
+    expect(await statusOf(seqC.sequenceId)).toBe(beforeC);
+    expect(await replyCount(seqC.sequenceId)).toBe(repliesBeforeC);
+
+    // Cross-tenant: Tenant B tries Tenant A's providerMessageId
+    const candidateB = await prepareApprovedResearchedCandidate(tenantB);
+    const seqTenantB = await createApprovedSentSequence(
+      tenantB,
+      candidateB,
+      'tenant-b@example.test',
+    );
+    const beforeTenantB = await statusOf(seqTenantB.sequenceId);
+    const beforeMsgOwner = await statusOf(seqD.sequenceId);
+    const cross = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantB}/sdr/sequences/${seqTenantB.sequenceId}/replies`,
+      {
+        providerEventId: `corr-xtenant-${Date.now()}`,
+        providerMessageId: seqD.providerMessageId,
+        classification: 'NEGATIVE',
+      },
+    );
+    expect(cross.statusCode).toBe(404);
+    expect(await statusOf(seqTenantB.sequenceId)).toBe(beforeTenantB);
+    expect(await statusOf(seqD.sequenceId)).toBe(beforeMsgOwner);
+    expect(
+      await prisma.sdrReply.count({
+        where: { tenantId: tenantB, providerEventId: { startsWith: 'corr-xtenant-' } },
+      }),
+    ).toBe(0);
   }, 180000);
 });

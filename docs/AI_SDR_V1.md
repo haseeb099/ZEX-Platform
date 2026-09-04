@@ -98,7 +98,17 @@ Signed webhook: `POST /api/v1/webhooks/outbound/reply`
 - Headers: `x-zex-sdr-signature`, `x-zex-sdr-timestamp`
 - Secret: `SDR_REPLY_WEBHOOK_SECRET`
 - Fail closed on bad signature / skew
+- **Requires `providerMessageId`** (never trusts `sequenceId` alone on the public webhook)
 - Idempotent on `providerEventId`
+
+### Reply correlation (fail closed)
+
+1. Resolve outbound message by `tenantId + providerMessageId`. Unknown → 404, no mutation.
+2. Canonical sequence is always `message.sequenceId`.
+3. If the payload also includes `sequenceId`, it **must** equal `message.sequenceId`. Mismatch → 400, no reply persisted, no sequence change, no CRM note.
+4. Cross-tenant `providerMessageId` → 404 (tenant-scoped lookup).
+
+Admin path `POST .../sdr/sequences/:sequenceId/replies` (Admin API key) may ingest by trusted path `sequenceId` for deterministic tests. If `providerMessageId` is also supplied there, the same mismatch rule applies.
 
 Any genuine reply → sequence `REPLIED` (or `CANCELLED` for NEGATIVE/UNSUBSCRIBE).
 

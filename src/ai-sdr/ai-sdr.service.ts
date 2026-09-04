@@ -625,7 +625,19 @@ export class AiSdrService {
     return this.serializeMessage(updated);
   }
 
-  async ingestReply(tenantId: string, raw: unknown, triggeredBy = 'reply-webhook') {
+  /**
+   * Ingest an inbound reply.
+   * - External webhook (`source: 'webhook'`): requires `providerMessageId`; never trusts sequenceId alone.
+   * - Admin/internal (`source: 'admin'`): may correlate by trusted path `sequenceId` for deterministic tests.
+   * When both ids are present they must refer to the same sequence (fail closed on mismatch).
+   */
+  async ingestReply(
+    tenantId: string,
+    raw: unknown,
+    triggeredBy = 'reply-webhook',
+    options: { source?: 'webhook' | 'admin' } = {},
+  ) {
+    const source = options.source ?? 'admin';
     const event = replyEventSchema.parse({ ...(raw as object), tenantId });
     const existing = await this.prisma.sdrReply.findUnique({
       where: {
@@ -636,20 +648,35 @@ export class AiSdrService {
       return { duplicate: true, reply: existing };
     }
 
+    if (source === 'webhook' && !event.providerMessageId) {
+      throw new BadRequestException('providerMessageId required for SDR reply webhook correlation');
+    }
+
     let sequence: SdrSequence | null = null;
     let message: SdrMessage | null = null;
-    if (event.sequenceId) {
-      sequence = await this.requireSequence(tenantId, event.sequenceId);
-    }
+
     if (event.providerMessageId) {
       message = await this.prisma.sdrMessage.findFirst({
         where: { tenantId, providerMessageId: event.providerMessageId },
       });
-      if (message && !sequence) {
-        sequence = await this.requireSequence(tenantId, message.sequenceId);
+      if (!message) {
+        throw new NotFoundException('Outbound message for reply not found');
       }
+      // Canonical sequence is always the message's sequence — never prefer a conflicting payload id.
+      if (event.sequenceId && event.sequenceId !== message.sequenceId) {
+        throw new BadRequestException(
+          'sequenceId does not match providerMessageId sequence (reply correlation mismatch)',
+        );
+      }
+      sequence = await this.requireSequence(tenantId, message.sequenceId);
+    } else if (event.sequenceId) {
+      // Admin/trusted path only (webhook rejected earlier without providerMessageId).
+      sequence = await this.requireSequence(tenantId, event.sequenceId);
     }
-    if (!sequence) throw new NotFoundException('Sequence for reply not found');
+
+    if (!sequence) {
+      throw new BadRequestException('sequenceId or providerMessageId required for reply');
+    }
 
     const reply = await this.prisma.sdrReply.create({
       data: {
