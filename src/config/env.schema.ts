@@ -40,4 +40,8 @@ export const envSchema = Joi.object({
   BULLMQ_ENRICH_BACKOFF_MS: Joi.number().integer().min(1).optional(),
   ADMIN_API_KEY: Joi.string().min(32).required(),
   WEBHOOK_RATE_LIMIT: Joi.number().default(1000),
+  /** Force deterministic Company Brain analyzer (also default in NODE_ENV=test). */
+  COMPANY_BRAIN_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** Optional future LLM credentials — unused by deterministic analyzer. */
+  OPENAI_API_KEY: Joi.string().allow('').optional(),
 });

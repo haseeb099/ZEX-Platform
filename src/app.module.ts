@@ -6,6 +6,7 @@ import { AuditModule } from './audit/audit.module';
 import { CommonModule } from './common/common.module';
 import { LoggerModule } from './common/logger/logger.module';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { CompanyBrainModule } from './company-brain/company-brain.module';
 import { envSchema } from './config/env.schema';
 import { EnrichmentModule } from './enrichment/enrichment.module';
 import { HealthModule } from './health/health.module';
@@ -43,6 +44,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     EnrichmentModule,
     ScoringModule,
     AuditModule,
+    CompanyBrainModule,
   ],
   providers: [
     {
