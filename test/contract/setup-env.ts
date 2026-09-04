@@ -39,6 +39,9 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 if (!process.env.ADMIN_API_KEY || process.env.ADMIN_API_KEY.length < 32) {
   process.env.ADMIN_API_KEY = 'contract-test-admin-api-key-32chars-min';
 }
+if (!process.env.SDR_REPLY_WEBHOOK_SECRET || process.env.SDR_REPLY_WEBHOOK_SECRET.length < 16) {
+  process.env.SDR_REPLY_WEBHOOK_SECRET = 'contract-test-sdr-reply-webhook-secret';
+}
 if (!process.env.MASTER_KEY || !/^[0-9a-fA-F]{64}$/.test(process.env.MASTER_KEY)) {
   process.env.MASTER_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 }

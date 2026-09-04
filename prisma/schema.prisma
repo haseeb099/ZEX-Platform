@@ -36,6 +36,7 @@ model Tenant {
   companyBrains        CompanyBrain[]
   prospectDiscoveryRuns ProspectDiscoveryRun[]
   prospectResearchRuns  ProspectResearchRun[]
+  sdrSequences          SdrSequence[]
 
   @@index([slug])
   @@index([status])
@@ -307,6 +308,7 @@ model ProspectCandidate {
   scoreSnapshots         ProspectScoreSnapshot[]
   researchRuns           ProspectResearchRun[]
   researchFindings       ProspectResearchFinding[]
+  sdrSequences           SdrSequence[]
 
   @@index([tenantId, discoveryRunId])
   @@index([tenantId, status])
@@ -434,6 +436,172 @@ model ProspectResearchFinding {
   @@index([tenantId, prospectCandidateId])
   @@index([tenantId, researchRunId])
   @@index([tenantId, findingType])
+}
+
+/// AI SDR outreach sequence — Platform-owned; approval-first send (ZEX-36).
+model SdrSequence {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prospectCandidateId  String
+  prospectCandidate    ProspectCandidate @relation(fields: [prospectCandidateId], references: [id], onDelete: Cascade)
+  researchRunId        String?
+  whyNowSnapshotId     String?
+  /// DRAFTING | AWAITING_APPROVAL | APPROVED | ACTIVE | PAUSED | REPLIED | COMPLETED | CANCELLED | FAILED
+  status               String   @default("DRAFTING")
+  channel              String   @default("email")
+  /// Explicit recipient — never guessed from names/domains
+  targetEmail          String?
+  targetPersonTwentyId String?
+  targetPersonName     String?
+  /// NONE | PENDING | COMPLETED | FAILED
+  crmSyncStatus        String   @default("NONE")
+  lastError            String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  drafts               SdrDraft[]
+  approvals            SdrApproval[]
+  messages             SdrMessage[]
+  replies              SdrReply[]
+  meetingBookings      SdrMeetingBooking[]
+
+  @@index([tenantId, prospectCandidateId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+/// Versioned outreach draft — never overwrite; supersede instead.
+model SdrDraft {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  sequenceId           String
+  sequence             SdrSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  prospectCandidateId  String
+  version              Int
+  channel              String   @default("email")
+  /// outreach | follow_up | reply | meeting
+  purpose              String   @default("outreach")
+  subject              String?
+  body                 String
+  evidenceRefs         Json?
+  researchFindingIds   Json?
+  whyNowSnapshotId     String?
+  doNotClaimApplied    Json?
+  grounding            Json?
+  confidence           Float    @default(0.5)
+  /// DRAFT | AWAITING_APPROVAL | APPROVED | SUPERSEDED | SENT
+  status               String   @default("DRAFT")
+  contentHash          String
+  generatedAt          DateTime @default(now())
+  supersededAt         DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  approvals            SdrApproval[]
+  messages             SdrMessage[]
+
+  @@unique([sequenceId, version])
+  @@index([tenantId, sequenceId])
+  @@index([tenantId, prospectCandidateId])
+  @@index([tenantId, contentHash])
+}
+
+/// Human approval bound to exact draft id + contentHash + version.
+model SdrApproval {
+  id          String    @id @default(cuid())
+  tenantId    String
+  sequenceId  String
+  sequence    SdrSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  draftId     String
+  draft       SdrDraft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  draftVersion Int
+  contentHash String
+  approvedBy  String
+  approvedAt  DateTime  @default(now())
+  /// ACTIVE | REVOKED
+  status      String    @default("ACTIVE")
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  messages    SdrMessage[]
+
+  @@index([tenantId, draftId])
+  @@index([tenantId, sequenceId])
+  @@index([tenantId, status])
+}
+
+/// Durable outbound send attempt — strongly idempotent.
+model SdrMessage {
+  id                String    @id @default(cuid())
+  tenantId          String
+  sequenceId        String
+  sequence          SdrSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  draftId           String
+  draft             SdrDraft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  approvalId        String
+  approval          SdrApproval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  channel           String    @default("email")
+  provider          String?
+  providerMessageId String?
+  idempotencyKey    String
+  /// QUEUED | SENDING | SENT | FAILED
+  status            String    @default("QUEUED")
+  sentAt            DateTime?
+  failedAt          DateTime?
+  error             String?
+  /// NONE | PENDING | COMPLETED | FAILED
+  crmSyncStatus     String    @default("NONE")
+  crmSyncError      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  replies           SdrReply[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, sequenceId])
+  @@index([tenantId, draftId])
+  @@index([tenantId, providerMessageId])
+  @@index([tenantId, status])
+}
+
+/// Inbound reply correlated to sequence/message.
+model SdrReply {
+  id              String   @id @default(cuid())
+  tenantId        String
+  sequenceId      String
+  sequence        SdrSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  messageId       String?
+  message         SdrMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  providerEventId String
+  /// POSITIVE | NEGATIVE | QUESTION | NOT_NOW | OOO | UNSUBSCRIBE | UNKNOWN
+  classification  String   @default("UNKNOWN")
+  sender          String?
+  subject         String?
+  bodySummary     String?
+  receivedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@unique([tenantId, providerEventId])
+  @@index([tenantId, sequenceId])
+  @@index([tenantId, messageId])
+}
+
+/// Deterministic meeting booking workflow (no silent calendar booking).
+model SdrMeetingBooking {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  sequenceId           String
+  sequence             SdrSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  prospectCandidateId  String
+  /// PROPOSED | AWAITING_APPROVAL | SENT | BOOKED | CANCELLED
+  status               String    @default("PROPOSED")
+  bookingLink          String?
+  providerMeetingId    String?
+  schedulingDraftId    String?
+  proposedTimes        Json?
+  createdAt            DateTime  @default(now())
+  completedAt          DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  @@index([tenantId, sequenceId])
+  @@index([tenantId, status])
 }
 
 /// Persistent CRM write checkpoints for enrich-and-score job retries.
