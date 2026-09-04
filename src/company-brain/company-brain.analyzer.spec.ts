@@ -140,7 +140,7 @@ Messaging themes: clarity, speed
     const merged = mergeGeneratedPayload({
       current,
       generated: regenerated,
-      overrides: { personas: { [personaId]: true } },
+      overrides: { personas: { items: { [personaId]: true } } },
     });
     expect(merged.personas[0].role).toBe('Human VP RevOps');
   });

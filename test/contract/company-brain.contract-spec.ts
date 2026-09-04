@@ -212,6 +212,28 @@ Messaging themes: trust, speed
     expect(regen.statusCode).toBe(201);
     expect(JSON.parse(regen.body).payload.messagingSummary.oneLiner).toBe(editedOneLiner);
 
+    const personaId = brain.payload.personas[0].id;
+    const del = await admin(
+      'DELETE',
+      `/api/v1/admin/tenants/${tenantAId}/company-brain/${brain.id}/personas/${personaId}`,
+    );
+    expect(del.statusCode).toBe(200);
+    expect(JSON.parse(del.body).payload.personas.map((p: { id: string }) => p.id)).not.toContain(
+      personaId,
+    );
+    expect(JSON.parse(del.body).userOverrides.personas.suppressedIds[personaId]).toBe(true);
+
+    const regenAfterDelete = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantAId}/company-brain/${brain.id}/regenerate`,
+      { sync: true },
+    );
+    expect(regenAfterDelete.statusCode).toBe(201);
+    const afterDelete = JSON.parse(regenAfterDelete.body);
+    expect(afterDelete.payload.personas.map((p: { id: string }) => p.id)).not.toContain(personaId);
+    expect(afterDelete.userOverrides.personas.suppressedIds[personaId]).toBe(true);
+    expect(afterDelete.payload.messagingSummary.oneLiner).toBe(editedOneLiner);
+
     const cross = await admin(
       'GET',
       `/api/v1/admin/tenants/${tenantBId}/company-brain/${brain.id}`,
@@ -242,6 +264,7 @@ Messaging themes: trust, speed
         'company_brain_created',
         'company_brain_analyzed',
         'company_brain_messaging_edited',
+        'company_brain_persona_removed',
       ]),
     );
     expect(

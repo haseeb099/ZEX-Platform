@@ -94,13 +94,25 @@ export const companyBrainPayloadSchema = z.object({
 
 export type CompanyBrainPayload = z.infer<typeof companyBrainPayloadSchema>;
 
+/**
+ * Per-list human override state.
+ * - `items`: edited/retained item ids (sticky values)
+ * - `suppressedIds`: tombstoned generated ids (sticky deletions)
+ * - `wholeSection`: entire list is human-controlled (no new generated items injected)
+ */
+export type CompanyBrainListOverrides = {
+  items?: Record<string, boolean>;
+  suppressedIds?: Record<string, boolean>;
+  wholeSection?: boolean;
+};
+
 export type CompanyBrainUserOverrides = {
   icp?: boolean;
   messagingSummary?: boolean;
-  personas?: Record<string, boolean>;
-  painPoints?: Record<string, boolean>;
-  competitors?: Record<string, boolean>;
-  qualificationRules?: Record<string, boolean>;
+  personas?: CompanyBrainListOverrides;
+  painPoints?: CompanyBrainListOverrides;
+  competitors?: CompanyBrainListOverrides;
+  qualificationRules?: CompanyBrainListOverrides;
 };
 
 export type NormalizedSourceDocument = {

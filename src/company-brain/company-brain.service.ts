@@ -26,7 +26,13 @@ import {
   UpsertPersonaDto,
   UpsertQualificationRuleDto,
 } from './dto/company-brain.dto';
-import { markSectionOverride, mergeGeneratedPayload } from './payload-merge';
+import {
+  markListItemOverride,
+  markListItemSuppressed,
+  markSectionOverride,
+  markWholeListOverride,
+  mergeGeneratedPayload,
+} from './payload-merge';
 import { CompanyBrainAnalyzerService } from './providers/company-brain-analyzer.service';
 import { safeFetchText } from './safe-url-fetch';
 import { hashSourceContent, normalizeSourceText } from './source-normalize';
@@ -373,72 +379,84 @@ export class CompanyBrainService {
       overrides = markSectionOverride(overrides, 'messagingSummary');
     }
     if (dto.personas) {
+      const previousIds = currentPayload.personas.map(p => p.id);
       payload = {
         ...payload,
-        personas: dto.personas.map(p =>
-          personaSchema.parse({
-            evidence: [],
+        personas: dto.personas.map(p => {
+          const id = typeof p.id === 'string' ? p.id : this.newItemId('persona');
+          const existing = currentPayload.personas.find(x => x.id === id);
+          return personaSchema.parse({
             goals: [],
             pains: [],
             objections: [],
             ...p,
-            id: typeof p.id === 'string' ? p.id : this.newItemId('persona'),
-          }),
-        ),
+            id,
+            evidence: Array.isArray(p.evidence) ? p.evidence : (existing?.evidence ?? []),
+          });
+        }),
       };
-      overrides = {
-        ...overrides,
-        personas: Object.fromEntries(payload.personas.map(p => [p.id, true])),
-      };
+      overrides = markWholeListOverride(overrides, 'personas', {
+        retainedIds: payload.personas.map(p => p.id),
+        previousIds,
+      });
     }
     if (dto.painPoints) {
+      const previousIds = currentPayload.painPoints.map(p => p.id);
       payload = {
         ...payload,
-        painPoints: dto.painPoints.map(p =>
-          painPointSchema.parse({
-            evidence: [],
+        painPoints: dto.painPoints.map(p => {
+          const id = typeof p.id === 'string' ? p.id : this.newItemId('pain');
+          const existing = currentPayload.painPoints.find(x => x.id === id);
+          return painPointSchema.parse({
             ...p,
-            id: typeof p.id === 'string' ? p.id : this.newItemId('pain'),
-          }),
-        ),
+            id,
+            evidence: Array.isArray(p.evidence) ? p.evidence : (existing?.evidence ?? []),
+          });
+        }),
       };
-      overrides = {
-        ...overrides,
-        painPoints: Object.fromEntries(payload.painPoints.map(p => [p.id, true])),
-      };
+      overrides = markWholeListOverride(overrides, 'painPoints', {
+        retainedIds: payload.painPoints.map(p => p.id),
+        previousIds,
+      });
     }
     if (dto.competitors) {
+      const previousIds = currentPayload.competitors.map(p => p.id);
       payload = {
         ...payload,
-        competitors: dto.competitors.map(p =>
-          competitorSchema.parse({
-            evidence: [],
+        competitors: dto.competitors.map(p => {
+          const id = typeof p.id === 'string' ? p.id : this.newItemId('competitor');
+          const existing = currentPayload.competitors.find(x => x.id === id);
+          return competitorSchema.parse({
             certainty: 'uncertain',
             ...p,
-            id: typeof p.id === 'string' ? p.id : this.newItemId('competitor'),
-          }),
-        ),
+            id,
+            evidence: Array.isArray(p.evidence) ? p.evidence : (existing?.evidence ?? []),
+          });
+        }),
       };
-      overrides = {
-        ...overrides,
-        competitors: Object.fromEntries(payload.competitors.map(p => [p.id, true])),
-      };
+      overrides = markWholeListOverride(overrides, 'competitors', {
+        retainedIds: payload.competitors.map(p => p.id),
+        previousIds,
+      });
     }
     if (dto.qualificationRules) {
+      const previousIds = currentPayload.qualificationRules.map(p => p.id);
       payload = {
         ...payload,
-        qualificationRules: dto.qualificationRules.map(p =>
-          qualificationRuleSchema.parse({
-            evidence: [],
+        qualificationRules: dto.qualificationRules.map(p => {
+          const id = typeof p.id === 'string' ? p.id : this.newItemId('rule');
+          const existing = currentPayload.qualificationRules.find(x => x.id === id);
+          return qualificationRuleSchema.parse({
             ...p,
-            id: typeof p.id === 'string' ? p.id : this.newItemId('rule'),
-          }),
-        ),
+            id,
+            evidence: Array.isArray(p.evidence) ? p.evidence : (existing?.evidence ?? []),
+          });
+        }),
       };
-      overrides = {
-        ...overrides,
-        qualificationRules: Object.fromEntries(payload.qualificationRules.map(p => [p.id, true])),
-      };
+      overrides = markWholeListOverride(overrides, 'qualificationRules', {
+        retainedIds: payload.qualificationRules.map(p => p.id),
+        previousIds,
+      });
     }
 
     const validated = companyBrainPayloadSchema.parse(payload);
@@ -494,7 +512,7 @@ export class CompanyBrainService {
     if (idx >= 0) payload.personas[idx] = persona;
     else payload.personas.push(persona);
 
-    const overrides = markSectionOverride(
+    const overrides = markListItemOverride(
       (brain.userOverrides ?? {}) as CompanyBrainUserOverrides,
       'personas',
       id,
@@ -534,13 +552,11 @@ export class CompanyBrainService {
       throw new NotFoundException('Persona not found');
     }
 
-    const overrides = {
-      ...((brain.userOverrides ?? {}) as CompanyBrainUserOverrides),
-      personas: {
-        ...(((brain.userOverrides ?? {}) as CompanyBrainUserOverrides).personas ?? {}),
-        [personaId]: true,
-      },
-    };
+    const overrides = markListItemSuppressed(
+      (brain.userOverrides ?? {}) as CompanyBrainUserOverrides,
+      'personas',
+      personaId,
+    );
 
     await this.prisma.companyBrain.update({
       where: { id: brainId },
@@ -585,7 +601,7 @@ export class CompanyBrainService {
     if (idx >= 0) payload.qualificationRules[idx] = rule;
     else payload.qualificationRules.push(rule);
 
-    const overrides = markSectionOverride(
+    const overrides = markListItemOverride(
       (brain.userOverrides ?? {}) as CompanyBrainUserOverrides,
       'qualificationRules',
       id,

@@ -71,12 +71,35 @@ Text sources are normalized and content-hashed. Re-submitting the same content r
 
 - Edits mark sections/items in `userOverrides`
 - `generatedPayload` always stores the latest AI draft
-- Effective `payload` is merged via `mergeGeneratedPayload`:
-  - overridden `icp` / `messagingSummary` keep human values
-  - list items (personas, pains, competitors, rules) with override flags keep human values by `id`
-  - non-overridden sections/items take the new generated draft
+- Effective `payload` is merged via `mergeGeneratedPayload`
 
-Regeneration **never** silently overwrites protected human edits.
+### Scalar sections
+
+- Overridden `icp` / `messagingSummary` keep human values entirely
+
+### List sections (`personas`, `painPoints`, `competitors`, `qualificationRules`)
+
+Stored as:
+
+```ts
+{
+  items?: Record<string, boolean>;        // edited/retained ids
+  suppressedIds?: Record<string, boolean>; // tombstoned generated ids
+  wholeSection?: boolean;                  // entire list is human-controlled
+}
+```
+
+Rules:
+
+| Action | Override effect | Regeneration |
+|---|---|---|
+| Edit item by id | `items[id]=true` | Keep human item; **allow** new unrelated generated items |
+| Delete item | `suppressedIds[id]=true` | Never re-add that id (survives multiple regenerations) |
+| Replace whole list (PATCH) | `wholeSection=true` (+ suppress dropped ids) | Keep exact human list; **do not** inject new generated items until override cleared |
+
+Evidence: when editing an existing id, existing evidence is preserved when the client omits it. Purely human-created ids may have empty evidence. Full AI provenance remains in `generatedPayload`.
+
+Regeneration **never** silently overwrites protected human edits or resurrects suppressed deletions.
 
 ## API (admin Bearer)
 
