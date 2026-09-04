@@ -33,6 +33,7 @@ model Tenant {
   auditLogs            AuditLog[]
   scoreHistory         ScoreHistory[]
   twentyConnection     TwentyConnection?
+  companyBrains        CompanyBrain[]
 
   @@index([slug])
   @@index([status])
@@ -183,6 +184,70 @@ model JobResult {
   completedAt DateTime?
 
   @@index([tenantId, jobType])
+  @@index([status])
+}
+
+/// Canonical Company Brain aggregate (ZEX-Platform intelligence). Not coupled to Twenty schemas.
+model CompanyBrain {
+  id               String   @id @default(cuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  companyName      String
+  websiteUrl       String?
+  /// draft | analyzing | ready | failed
+  status           String   @default("draft")
+  version          Int      @default(1)
+  /// Last validated AI-generated structured payload (provenance snapshot).
+  generatedPayload Json?
+  /// Effective editable payload returned to clients (human overrides applied).
+  payload          Json?
+  /// Section/item keys protected from regeneration overwrite.
+  userOverrides    Json?
+  lastAnalyzedAt   DateTime?
+  lastError        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  sources          CompanyBrainSource[]
+  analysisJobs     CompanyBrainAnalysisJob[]
+
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, status])
+}
+
+/// Ingested evidence sources for a Company Brain. Deduped by contentHash per brain.
+model CompanyBrainSource {
+  id             String       @id @default(cuid())
+  tenantId       String
+  companyBrainId String
+  companyBrain   CompanyBrain @relation(fields: [companyBrainId], references: [id], onDelete: Cascade)
+  /// WEBSITE | URL | PASTED_TEXT | DOCUMENT_TEXT
+  sourceType     String
+  sourceUrl      String?
+  title          String?
+  rawText        String       @db.Text
+  contentHash    String
+  fetchedAt      DateTime?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@unique([companyBrainId, contentHash])
+  @@index([tenantId, companyBrainId])
+}
+
+/// Durable analysis job status for async Company Brain generation.
+model CompanyBrainAnalysisJob {
+  id             String       @id @default(cuid())
+  tenantId       String
+  companyBrainId String
+  companyBrain   CompanyBrain @relation(fields: [companyBrainId], references: [id], onDelete: Cascade)
+  bullJobId      String?
+  /// queued | processing | completed | failed
+  status         String       @default("queued")
+  error          String?
+  createdAt      DateTime     @default(now())
+  completedAt    DateTime?
+
+  @@index([tenantId, companyBrainId])
   @@index([status])
 }
 
