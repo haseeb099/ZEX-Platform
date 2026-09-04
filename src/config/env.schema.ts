@@ -47,6 +47,10 @@ export const envSchema = Joi.object({
   WHY_NOW_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   /** Force deterministic Research Agent provider (also preferred in NODE_ENV=test). */
   RESEARCH_AGENT_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** Force deterministic AI SDR outbound/meeting providers (also preferred in NODE_ENV=test). */
+  AI_SDR_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  /** HMAC secret for inbound SDR reply webhooks. */
+  SDR_REPLY_WEBHOOK_SECRET: Joi.string().min(16).required(),
   /** Optional future LLM credentials — unused by deterministic analyzer. */
   OPENAI_API_KEY: Joi.string().allow('').optional(),
 });
