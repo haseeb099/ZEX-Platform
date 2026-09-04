@@ -53,7 +53,9 @@ Priority:
 3. Exact **name** when candidate has **no domain** → `EXACT_MATCH`
 4. Else `NEW`
 
-Re-dedupe runs immediately before CRM write.
+**Discovery-time** CRM reads are **best-effort** (lookup failures do not invent matches).
+
+**Pre-create** re-dedupe is **fail-closed**: domain/name lookups must succeed before `createCompany`. If CRM is unreachable, the candidate is marked `FAILED` (retryable), audited, and no company is created. Retries after CRM recovery create at most once (checkpoint / `createdTwentyCompanyId` recovery skips live lookups when a company id is already known).
 
 ## Person dedupe / creation
 

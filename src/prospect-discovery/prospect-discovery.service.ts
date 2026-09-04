@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProspectCandidate, ProspectDiscoveryRun } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { AuditService } from '@src/audit/audit.service';
 import { CompanyBrainService } from '@src/company-brain/company-brain.service';
@@ -22,6 +22,12 @@ import {
   buyerRoleSchema,
   fitReasonSchema,
 } from './prospect-discovery.types';
+
+type DiscoveryRunWithCandidates = ProspectDiscoveryRun & {
+  candidates?: ProspectCandidate[];
+};
+
+type CrmDedupeLoadMode = 'best-effort' | 'fail-closed';
 
 @Injectable()
 export class ProspectDiscoveryService {
@@ -320,15 +326,6 @@ export class ProspectDiscoveryService {
       );
     }
 
-    // Re-dedupe immediately before write (race-safe). Own prior create is not a blocker.
-    const crmCompanies = await this.loadCrmCompaniesForCandidate(tenantId, candidate);
-    const dedupe = dedupeCompanyAgainstCrm({
-      companyName: candidate.companyName,
-      domain: candidate.domain,
-      websiteUrl: candidate.websiteUrl,
-      crmCompanies,
-    });
-
     const checkpointKey = candidateId;
     const existingCheckpoint = await this.checkpoints.getCompleted(
       tenantId,
@@ -340,12 +337,9 @@ export class ProspectDiscoveryService {
       candidate.createdTwentyCompanyId ||
       undefined;
 
-    if (
-      dedupe.status === 'EXACT_MATCH' &&
-      dedupe.existingTwentyCompanyId &&
-      knownCompanyId &&
-      dedupe.existingTwentyCompanyId === knownCompanyId
-    ) {
+    // Idempotent recovery: if we already created (or checkpointed) a company, do not
+    // require live CRM dedupe reads and never call createCompany again.
+    if (knownCompanyId) {
       const updated = await this.prisma.prospectCandidate.update({
         where: { id: candidateId },
         data: {
@@ -364,6 +358,40 @@ export class ProspectDiscoveryService {
       });
       return this.serializeCandidate(updated);
     }
+
+    // Final CRM dedupe is fail-closed: lookup must succeed before createCompany.
+    let crmCompanies: TwentyCompany[];
+    try {
+      crmCompanies = await this.loadCrmCompanies(tenantId, [candidate], 'fail-closed');
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'CRM dedupe lookup failed before company create';
+      await this.prisma.prospectCandidate.update({
+        where: { id: candidateId },
+        data: {
+          status: 'FAILED',
+          lastError: message,
+        },
+      });
+      await this.audit.log({
+        tenantId,
+        action: 'prospect_candidate_crm_create_failed',
+        resourceType: 'ProspectCandidate',
+        resourceTwentyId: candidateId,
+        success: false,
+        message,
+        after: { reason: 'crm_dedupe_lookup_failed', retryable: true },
+        triggeredBy,
+      });
+      throw err;
+    }
+
+    const dedupe = dedupeCompanyAgainstCrm({
+      companyName: candidate.companyName,
+      domain: candidate.domain,
+      websiteUrl: candidate.websiteUrl,
+      crmCompanies,
+    });
 
     if (dedupe.status === 'EXACT_MATCH') {
       const updated = await this.prisma.prospectCandidate.update({
@@ -397,24 +425,22 @@ export class ProspectDiscoveryService {
       throw new BadRequestException('Possible CRM match — creation blocked in v1');
     }
 
-    let twentyCompanyId = knownCompanyId;
+    let twentyCompanyId: string | undefined;
 
     try {
-      if (!twentyCompanyId) {
-        const created = await this.twenty.createCompany(tenantId, {
-          name: candidate.companyName,
-          domain: candidate.domain,
-          websiteUrl: candidate.websiteUrl,
-        });
-        twentyCompanyId = created.id;
-        await this.checkpoints.recordSuccess(
-          tenantId,
-          checkpointKey,
-          candidateId,
-          CRM_WRITE_ACTIONS.CREATE_COMPANY,
-          twentyCompanyId,
-        );
-      }
+      const created = await this.twenty.createCompany(tenantId, {
+        name: candidate.companyName,
+        domain: candidate.domain,
+        websiteUrl: candidate.websiteUrl,
+      });
+      twentyCompanyId = created.id;
+      await this.checkpoints.recordSuccess(
+        tenantId,
+        checkpointKey,
+        candidateId,
+        CRM_WRITE_ACTIONS.CREATE_COMPANY,
+        twentyCompanyId,
+      );
 
       const updated = await this.prisma.prospectCandidate.update({
         where: { id: candidateId },
@@ -458,9 +484,15 @@ export class ProspectDiscoveryService {
     }
   }
 
-  private async loadCrmCompaniesForDedupe(
+  /**
+   * Load CRM companies for dedupe.
+   * - best-effort: discovery-time (lookup failures do not invent matches; continue)
+   * - fail-closed: pre-create (any lookup failure aborts; never call createCompany)
+   */
+  private async loadCrmCompanies(
     tenantId: string,
     candidates: Array<{ domain?: string | null; websiteUrl?: string | null; companyName: string }>,
+    mode: CrmDedupeLoadMode,
   ): Promise<TwentyCompany[]> {
     const byId = new Map<string, TwentyCompany>();
     for (const c of candidates) {
@@ -470,26 +502,32 @@ export class ProspectDiscoveryService {
           for (const hit of await this.twenty.findCompaniesByDomain(tenantId, domain)) {
             byId.set(hit.id, hit);
           }
-        } catch {
-          // CRM read failures should not invent matches; continue with what we have
+        } catch (err) {
+          if (mode === 'fail-closed') {
+            const detail = err instanceof Error ? err.message : 'unknown error';
+            throw new Error(`CRM company domain dedupe lookup failed: ${detail}`);
+          }
         }
       }
       try {
         for (const hit of await this.twenty.findCompaniesByName(tenantId, c.companyName)) {
           byId.set(hit.id, hit);
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        if (mode === 'fail-closed') {
+          const detail = err instanceof Error ? err.message : 'unknown error';
+          throw new Error(`CRM company name dedupe lookup failed: ${detail}`);
+        }
       }
     }
     return [...byId.values()];
   }
 
-  private async loadCrmCompaniesForCandidate(
+  private async loadCrmCompaniesForDedupe(
     tenantId: string,
-    candidate: { domain: string | null; websiteUrl: string | null; companyName: string },
+    candidates: Array<{ domain?: string | null; websiteUrl?: string | null; companyName: string }>,
   ): Promise<TwentyCompany[]> {
-    return this.loadCrmCompaniesForDedupe(tenantId, [candidate]);
+    return this.loadCrmCompanies(tenantId, candidates, 'best-effort');
   }
 
   private async requireTenant(tenantId: string) {
@@ -509,7 +547,7 @@ export class ProspectDiscoveryService {
     return candidate;
   }
 
-  private serializeRun(run: any) {
+  private serializeRun(run: DiscoveryRunWithCandidates) {
     return {
       id: run.id,
       tenantId: run.tenantId,
@@ -523,16 +561,16 @@ export class ProspectDiscoveryService {
       updatedAt: run.updatedAt,
       candidateSummary: {
         total: run.candidates?.length ?? 0,
-        byStatus: (run.candidates ?? []).reduce((acc: Record<string, number>, c: any) => {
+        byStatus: (run.candidates ?? []).reduce((acc: Record<string, number>, c) => {
           acc[c.status] = (acc[c.status] ?? 0) + 1;
           return acc;
         }, {}),
       },
-      candidates: (run.candidates ?? []).map((c: any) => this.serializeCandidate(c)),
+      candidates: (run.candidates ?? []).map(c => this.serializeCandidate(c)),
     };
   }
 
-  private serializeCandidate(candidate: any) {
+  private serializeCandidate(candidate: ProspectCandidate) {
     return {
       id: candidate.id,
       tenantId: candidate.tenantId,
@@ -548,7 +586,7 @@ export class ProspectDiscoveryService {
       fitScore: candidate.fitScore,
       fitBand: candidate.fitBand,
       fitReasons: Array.isArray(candidate.fitReasons)
-        ? candidate.fitReasons.map((r: unknown) => fitReasonSchema.parse(r))
+        ? candidate.fitReasons.map(r => fitReasonSchema.parse(r))
         : candidate.fitReasons,
       disqualifiers: candidate.disqualifiers ?? [],
       status: candidate.status,
@@ -557,7 +595,7 @@ export class ProspectDiscoveryService {
       createdTwentyCompanyId: candidate.createdTwentyCompanyId,
       evidence: candidate.evidence ?? [],
       buyerRoles: Array.isArray(candidate.buyerRoles)
-        ? candidate.buyerRoles.map((r: unknown) => buyerRoleSchema.parse(r))
+        ? candidate.buyerRoles.map(r => buyerRoleSchema.parse(r))
         : candidate.buyerRoles,
       lastError: candidate.lastError,
       createdAt: candidate.createdAt,

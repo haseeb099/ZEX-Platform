@@ -377,7 +377,11 @@ export class FakeTwentyGraphqlServer {
     }
 
     if (operation === 'FindCompaniesByDomain' || operation === 'FindCompaniesByName') {
-      const filter = (variables.filter || {}) as Record<string, any>;
+      type CompanySearchFilter = {
+        domainName?: { primaryLinkUrl?: { ilike?: string; eq?: string } };
+        name?: { ilike?: string; eq?: string };
+      };
+      const filter = (variables.filter || {}) as CompanySearchFilter;
       const domainNeedle = String(
         filter.domainName?.primaryLinkUrl?.ilike || filter.domainName?.primaryLinkUrl?.eq || '',
       )
@@ -413,7 +417,12 @@ export class FakeTwentyGraphqlServer {
 
     if (operation === 'CreateCompany') {
       this.companyCounter += 1;
-      const data = (variables.data || variables.input || {}) as Record<string, any>;
+      type CreateCompanyVars = {
+        name?: string;
+        domain?: string;
+        domainName?: { primaryLinkUrl?: string | null };
+      };
+      const data = (variables.data || variables.input || {}) as CreateCompanyVars;
       const id = `company_contract_${this.companyCounter}`;
       const website =
         data.domainName?.primaryLinkUrl ||

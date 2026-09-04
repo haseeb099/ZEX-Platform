@@ -76,6 +76,25 @@ Proof points: audit-first pipeline
 Messaging themes: trust, speed
 `;
 
+type DiscoveryCandidateBody = {
+  id: string;
+  domain: string | null;
+  providerKey: string | null;
+  status: string;
+  dedupeStatus: string;
+  existingTwentyCompanyId: string | null;
+  createdTwentyCompanyId?: string | null;
+  lastError?: string | null;
+  buyerRoles?: Array<{ role: string }>;
+  fitReasons?: unknown[];
+};
+
+type DiscoveryRunBody = {
+  id: string;
+  status: string;
+  candidates: DiscoveryCandidateBody[];
+};
+
 describe('Prospect Discovery v1 contract', () => {
   let app: NestFastifyApplication;
   let prisma: PrismaService;
@@ -170,36 +189,36 @@ describe('Prospect Discovery v1 contract', () => {
       sync: true,
     });
     expect(discover.statusCode).toBe(201);
-    const run = JSON.parse(discover.body);
+    const run = JSON.parse(discover.body) as DiscoveryRunBody;
     expect(run.status).toBe('completed');
     expect(run.candidates.length).toBeGreaterThanOrEqual(4);
 
     for (const c of run.candidates) {
       expect(c.buyerRoles?.length).toBeGreaterThan(0);
-      expect(c.buyerRoles[0].role).toBeTruthy();
+      expect(c.buyerRoles?.[0]?.role).toBeTruthy();
       expect(c.fitReasons?.length).toBeGreaterThan(0);
     }
 
-    const duplicate = run.candidates.find((c: any) => c.domain === 'acme-duplicate.example');
+    const duplicate = run.candidates.find(c => c.domain === 'acme-duplicate.example');
     expect(duplicate).toBeTruthy();
-    expect(duplicate.dedupeStatus).toBe('EXACT_MATCH');
-    expect(duplicate.status).toBe('DUPLICATE');
-    expect(duplicate.existingTwentyCompanyId).toBe('co_acme_dup');
+    expect(duplicate!.dedupeStatus).toBe('EXACT_MATCH');
+    expect(duplicate!.status).toBe('DUPLICATE');
+    expect(duplicate!.existingTwentyCompanyId).toBe('co_acme_dup');
 
-    const fresh = run.candidates.find((c: any) => c.providerKey === 'det_new_valid');
+    const fresh = run.candidates.find(c => c.providerKey === 'det_new_valid');
     expect(fresh).toBeTruthy();
-    expect(fresh.status).toBe('PROPOSED');
-    expect(fresh.dedupeStatus).toBe('NEW');
+    expect(fresh!.status).toBe('PROPOSED');
+    expect(fresh!.dedupeStatus).toBe('NEW');
 
     const createBeforeApprove = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh.id}/create`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh!.id}/create`,
     );
     expect(createBeforeApprove.statusCode).toBeGreaterThanOrEqual(400);
 
     const approve = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh.id}/approve`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh!.id}/approve`,
     );
     expect(approve.statusCode).toBe(201);
     expect(JSON.parse(approve.body).status).toBe('APPROVED');
@@ -207,17 +226,17 @@ describe('Prospect Discovery v1 contract', () => {
     const companiesBefore = fakeTwenty.getCompanies().length;
     const create = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh.id}/create`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh!.id}/create`,
     );
     expect(create.statusCode).toBe(201);
-    const created = JSON.parse(create.body);
+    const created = JSON.parse(create.body) as DiscoveryCandidateBody;
     expect(created.status).toBe('CREATED');
     expect(created.createdTwentyCompanyId).toBeTruthy();
     expect(fakeTwenty.getCompanies().length).toBe(companiesBefore + 1);
 
     const retry = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh.id}/retry-create`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh!.id}/retry-create`,
     );
     // Already CREATED — should reject or be idempotent; service requires APPROVED|FAILED
     expect(retry.statusCode).toBeGreaterThanOrEqual(400);
@@ -225,28 +244,29 @@ describe('Prospect Discovery v1 contract', () => {
 
     // Force FAILED with company id present then retry should not duplicate
     await prisma.prospectCandidate.update({
-      where: { id: fresh.id },
+      where: { id: fresh!.id },
       data: { status: 'FAILED', lastError: 'simulated' },
     });
     const retryOk = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh.id}/retry-create`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${fresh!.id}/retry-create`,
     );
     expect(retryOk.statusCode).toBe(201);
     expect(JSON.parse(retryOk.body).createdTwentyCompanyId).toBe(created.createdTwentyCompanyId);
     expect(fakeTwenty.getCompanies().length).toBe(companiesBefore + 1);
 
-    const toReject = run.candidates.find((c: any) => c.providerKey === 'det_strong_fit');
+    const toReject = run.candidates.find(c => c.providerKey === 'det_strong_fit');
+    expect(toReject).toBeTruthy();
     const reject = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${toReject.id}/reject`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${toReject!.id}/reject`,
     );
     expect(reject.statusCode).toBe(201);
     expect(JSON.parse(reject.body).status).toBe('REJECTED');
 
     const createRejected = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${toReject.id}/create`,
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${toReject!.id}/create`,
     );
     expect(createRejected.statusCode).toBeGreaterThanOrEqual(400);
 
@@ -258,7 +278,7 @@ describe('Prospect Discovery v1 contract', () => {
 
     const crossApprove = await admin(
       'POST',
-      `/api/v1/admin/tenants/${tenantBId}/prospect-discovery/candidates/${fresh.id}/approve`,
+      `/api/v1/admin/tenants/${tenantBId}/prospect-discovery/candidates/${fresh!.id}/approve`,
     );
     expect(crossApprove.statusCode).toBe(404);
 
@@ -278,5 +298,91 @@ describe('Prospect Discovery v1 contract', () => {
         'prospect_candidate_rejected',
       ]),
     );
+  });
+
+  it('fail-closed: CRM dedupe read failure blocks create; retry creates once after recovery', async () => {
+    if (!brainId) {
+      const brainRes = await admin('POST', `/api/v1/admin/tenants/${tenantAId}/company-brain`, {
+        companyName: 'ZEX Platform',
+        pastedText: BRAIN_TEXT,
+        analyze: true,
+        sync: true,
+      });
+      expect(brainRes.statusCode).toBe(201);
+      brainId = JSON.parse(brainRes.body).id;
+    }
+
+    const discover = await admin('POST', `/api/v1/admin/tenants/${tenantAId}/prospect-discovery`, {
+      companyBrainId: brainId,
+      sync: true,
+    });
+    expect(discover.statusCode).toBe(201);
+    const run = JSON.parse(discover.body) as DiscoveryRunBody;
+    const candidate = run.candidates.find(
+      c => c.providerKey === 'det_strong_fit' && c.status === 'PROPOSED',
+    );
+    expect(candidate).toBeTruthy();
+
+    const approve = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${candidate!.id}/approve`,
+    );
+    expect(approve.statusCode).toBe(201);
+
+    const createCountBeforeFail = fakeTwenty.countOperations('CreateCompany');
+    fakeTwenty.failOperation('FindCompaniesByDomain');
+    fakeTwenty.failOperation('FindCompaniesByName');
+
+    const blocked = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${candidate!.id}/create`,
+    );
+    expect(blocked.statusCode).toBeGreaterThanOrEqual(400);
+    expect(fakeTwenty.countOperations('CreateCompany')).toBe(createCountBeforeFail);
+
+    const failedRow = await prisma.prospectCandidate.findFirst({
+      where: { id: candidate!.id, tenantId: tenantAId },
+    });
+    expect(failedRow?.status).toBe('FAILED');
+    expect(failedRow?.lastError).toMatch(/dedupe lookup failed/i);
+    expect(failedRow?.createdTwentyCompanyId).toBeNull();
+
+    const failAudits = await prisma.auditLog.findMany({
+      where: {
+        tenantId: tenantAId,
+        resourceTwentyId: candidate!.id,
+        action: 'prospect_candidate_crm_create_failed',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(failAudits.length).toBeGreaterThan(0);
+    expect(JSON.stringify(failAudits[0].after ?? {})).toMatch(/crm_dedupe_lookup_failed/);
+
+    fakeTwenty.clearFailedOperations();
+    const companiesBeforeRetry = fakeTwenty.getCompanies().length;
+    const retry = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${candidate!.id}/retry-create`,
+    );
+    expect(retry.statusCode).toBe(201);
+    const created = JSON.parse(retry.body) as DiscoveryCandidateBody;
+    expect(created.status).toBe('CREATED');
+    expect(created.createdTwentyCompanyId).toBeTruthy();
+    expect(fakeTwenty.getCompanies().length).toBe(companiesBeforeRetry + 1);
+    expect(fakeTwenty.countOperations('CreateCompany')).toBe(createCountBeforeFail + 1);
+
+    // Second retry recovers via checkpoint / created id — no second createCompany
+    await prisma.prospectCandidate.update({
+      where: { id: candidate!.id },
+      data: { status: 'FAILED', lastError: 'simulated-after-success' },
+    });
+    const retryAgain = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantAId}/prospect-discovery/candidates/${candidate!.id}/retry-create`,
+    );
+    expect(retryAgain.statusCode).toBe(201);
+    expect(JSON.parse(retryAgain.body).createdTwentyCompanyId).toBe(created.createdTwentyCompanyId);
+    expect(fakeTwenty.getCompanies().length).toBe(companiesBeforeRetry + 1);
+    expect(fakeTwenty.countOperations('CreateCompany')).toBe(createCountBeforeFail + 1);
   });
 });
