@@ -44,6 +44,27 @@ Built only from typed `ProspectSignal` records.
 - Negative / conflict signals reduce intent and confidence
 - Disqualified ICP caps intent enthusiasm
 
+### Buying-trigger alignment (deterministic)
+
+A signal is **trigger-aligned** only when grounded:
+
+1. **Text match:** normalized signal title/summary contains the full Company Brain buying-trigger phrase, or
+2. **Explicit type↔trigger mapping:** the signal’s `signalType` has a documented keyword list, and the trigger text contains one of those keywords.
+
+Conservative mappings (`SIGNAL_TYPE_TRIGGER_KEYWORDS`):
+
+| signalType | Trigger text must mention one of |
+|---|---|
+| `crm_migration` | crm, migration, salesforce, hubspot |
+| `hiring` | hiring, headcount, sales hiring, outbound scaling, revops |
+| `funding` | funding, fundraise, raised, series |
+| `expansion` | expansion, new market, geographic expansion, international expansion |
+| `tech_change` | tech change, technology change, stack migration, platform migration |
+
+**Non-examples:** `expansion` does **not** align with a brain that only lists `CRM migration`. `funding` does **not** align with `outbound scaling` alone. Presence of any CRM-style trigger does **not** unlock unrelated signal types.
+
+Aligned signals receive the larger intent/timing boost and may appear in the Why-Now sentence as matching a Company Brain buying trigger. Generic (non-aligned) signals still contribute a smaller amount.
+
 ## Timing + decay
 
 Timing uses signal `occurredAt` age:

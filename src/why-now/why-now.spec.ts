@@ -1,4 +1,5 @@
 import { assessIcpFit } from '@src/prospect-discovery/fit-scoring';
+import { signalMatchesBuyingTrigger } from './buying-trigger-match';
 import { buildSignalDedupeKey, clampScore, daysBetween, timingDecayFactor } from './signal-utils';
 import { assessWhyNow } from './why-now-scoring';
 import { WHY_NOW_WEIGHTS } from './why-now.types';
@@ -233,6 +234,194 @@ describe('why-now scoring', () => {
     });
     expect(scored.intentReasons.some(r => r.type === 'conflict')).toBe(true);
     expect(scored.confidence).toBeLessThan(0.85);
+  });
+});
+
+describe('buying-trigger alignment (grounded)', () => {
+  const now = new Date('2026-09-04T12:00:00.000Z');
+  const crmBrain = {
+    ...brain,
+    icp: { ...brain.icp, buyingTriggers: ['CRM migration'] },
+  };
+  const expansionBrain = {
+    ...brain,
+    icp: { ...brain.icp, buyingTriggers: ['International expansion'] },
+  };
+  const crmOutboundBrain = {
+    ...brain,
+    icp: { ...brain.icp, buyingTriggers: ['CRM migration', 'outbound scaling'] },
+  };
+
+  it('crm_migration aligns with CRM migration trigger', () => {
+    expect(
+      signalMatchesBuyingTrigger(
+        { signalType: 'crm_migration', title: 'CRM tooling change', summary: null },
+        ['crm migration'],
+      ),
+    ).toBe(true);
+
+    const scored = assessWhyNow({
+      brain: crmBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's1',
+          signalType: 'crm_migration',
+          category: 'buying_trigger',
+          title: 'CRM tooling change',
+          source: 'test',
+          occurredAt: new Date('2026-09-01T12:00:00.000Z'),
+          confidence: 0.9,
+          relevance: 0.95,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentReasons.some(r => r.label.startsWith('Buying-trigger aligned'))).toBe(true);
+    expect(scored.intentScore).toBeGreaterThanOrEqual(60);
+    expect(scored.whyNow.toLowerCase()).toMatch(/buying trigger|crm/);
+  });
+
+  it('unrelated expansion does NOT align with CRM migration', () => {
+    expect(
+      signalMatchesBuyingTrigger(
+        {
+          signalType: 'expansion',
+          title: 'Expanding into Germany',
+          summary: 'Company expands into Germany',
+        },
+        ['crm migration'],
+      ),
+    ).toBe(false);
+
+    const scored = assessWhyNow({
+      brain: crmBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's1',
+          signalType: 'expansion',
+          category: 'growth',
+          title: 'Expanding into Germany',
+          summary: 'Company expands into Germany',
+          source: 'test',
+          occurredAt: new Date('2026-09-02T12:00:00.000Z'),
+          confidence: 0.9,
+          relevance: 0.9,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentReasons.some(r => r.label.startsWith('Buying-trigger aligned'))).toBe(
+      false,
+    );
+    expect(scored.whyNow.toLowerCase()).not.toContain('aligns with company brain buying triggers');
+    // Generic contribution only — lower than trigger-aligned CRM path
+    const crmAligned = assessWhyNow({
+      brain: crmBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's2',
+          signalType: 'crm_migration',
+          category: 'buying_trigger',
+          title: 'CRM tooling change',
+          source: 'test',
+          occurredAt: new Date('2026-09-02T12:00:00.000Z'),
+          confidence: 0.9,
+          relevance: 0.9,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentScore).toBeLessThan(crmAligned.intentScore);
+    expect(scored.timingScore).toBeLessThan(crmAligned.timingScore);
+  });
+
+  it('expansion aligns with an international expansion trigger', () => {
+    expect(
+      signalMatchesBuyingTrigger(
+        { signalType: 'expansion', title: 'Opening EU office', summary: null },
+        ['international expansion'],
+      ),
+    ).toBe(true);
+
+    const scored = assessWhyNow({
+      brain: expansionBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's1',
+          signalType: 'expansion',
+          category: 'growth',
+          title: 'Opening EU office',
+          source: 'test',
+          occurredAt: new Date('2026-09-02T12:00:00.000Z'),
+          confidence: 0.9,
+          relevance: 0.9,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentReasons.some(r => r.label.startsWith('Buying-trigger aligned'))).toBe(true);
+  });
+
+  it('funding does not align with CRM / outbound triggers', () => {
+    expect(
+      signalMatchesBuyingTrigger(
+        { signalType: 'funding', title: 'Series B announced', summary: null },
+        ['crm migration', 'outbound scaling'],
+      ),
+    ).toBe(false);
+
+    const scored = assessWhyNow({
+      brain: crmOutboundBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's1',
+          signalType: 'funding',
+          category: 'growth',
+          title: 'Series B announced',
+          source: 'test',
+          occurredAt: new Date('2026-09-02T12:00:00.000Z'),
+          confidence: 0.9,
+          relevance: 0.9,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentReasons.some(r => r.label.startsWith('Buying-trigger aligned'))).toBe(
+      false,
+    );
+    expect(scored.whyNow.toLowerCase()).not.toContain('aligns with company brain buying triggers');
+  });
+
+  it('hiring aligns with outbound scaling (documented semantic mapping)', () => {
+    expect(
+      signalMatchesBuyingTrigger({ signalType: 'hiring', title: 'Hiring AEs', summary: null }, [
+        'outbound scaling',
+      ]),
+    ).toBe(true);
+
+    const scored = assessWhyNow({
+      brain: crmOutboundBrain,
+      candidate: strongCandidate,
+      signals: [
+        {
+          id: 's1',
+          signalType: 'hiring',
+          category: 'growth',
+          title: 'Hiring AEs',
+          source: 'test',
+          occurredAt: new Date('2026-09-02T12:00:00.000Z'),
+          confidence: 0.85,
+          relevance: 0.85,
+        },
+      ],
+      now,
+    });
+    expect(scored.intentReasons.some(r => r.label.startsWith('Buying-trigger aligned'))).toBe(true);
   });
 });
 

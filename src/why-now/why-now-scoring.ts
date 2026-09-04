@@ -1,5 +1,6 @@
 import { assessIcpFit } from '@src/prospect-discovery/fit-scoring';
 import type { ProspectDiscoveryIcpInput } from '@src/prospect-discovery/prospect-discovery.types';
+import { signalMatchesBuyingTrigger } from './buying-trigger-match';
 import { clampConfidence, clampScore, daysBetween, timingDecayFactor } from './signal-utils';
 import {
   ScoreReason,
@@ -77,35 +78,7 @@ export function assessWhyNow(input: {
     const polarity =
       signal.category === 'negative' || signal.signalType === 'disqualifier_conflict' ? -1 : 1;
 
-    const triggerHit = buyingTriggers.some(
-      t =>
-        signal.title.toLowerCase().includes(t) ||
-        (signal.summary ?? '').toLowerCase().includes(t) ||
-        signal.signalType.replace(/_/g, ' ').includes(t) ||
-        t.includes(signal.signalType.replace(/_/g, ' ')),
-    );
-
-    // Also match known CRM migration / hiring style triggers loosely
-    const knownTrigger =
-      triggerHit ||
-      (buyingTriggers.length > 0 &&
-        ['crm_migration', 'hiring', 'tech_change', 'expansion', 'funding'].includes(
-          signal.signalType,
-        ) &&
-        buyingTriggers.some(
-          t =>
-            t.includes('crm') ||
-            t.includes('migration') ||
-            t.includes('hiring') ||
-            t.includes('outbound') ||
-            t.includes('funding'),
-        ) &&
-        (signal.signalType === 'crm_migration' ||
-          (signal.signalType === 'hiring' &&
-            buyingTriggers.some(t => t.includes('hiring') || t.includes('outbound'))) ||
-          signal.signalType === 'funding' ||
-          signal.signalType === 'tech_change' ||
-          signal.signalType === 'expansion'));
+    const knownTrigger = signalMatchesBuyingTrigger(signal, buyingTriggers);
 
     const intentDelta =
       polarity * (30 + (knownTrigger ? 28 : 8)) * signal.confidence * signal.relevance;
