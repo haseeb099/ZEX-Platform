@@ -11,6 +11,7 @@ import { envSchema } from './config/env.schema';
 import { EnrichmentModule } from './enrichment/enrichment.module';
 import { HealthModule } from './health/health.module';
 import { JobsModule } from './jobs/jobs.module';
+import { ProspectDiscoveryModule } from './prospect-discovery/prospect-discovery.module';
 import { ScoringModule } from './scoring/scoring.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TwentyModule } from './twenty/twenty.module';
@@ -45,6 +46,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     ScoringModule,
     AuditModule,
     CompanyBrainModule,
+    ProspectDiscoveryModule,
   ],
   providers: [
     {

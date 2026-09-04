@@ -39,3 +39,16 @@ export type CreateNoteTargetInput = {
   noteId: string;
   personId: string;
 };
+
+export type TwentyCompany = {
+  id: string;
+  name?: string | null;
+  domain?: string | null;
+  websiteUrl?: string | null;
+};
+
+export type CreateCompanyInput = {
+  name: string;
+  domain?: string | null;
+  websiteUrl?: string | null;
+};

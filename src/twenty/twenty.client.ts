@@ -4,9 +4,11 @@ import { TwentyConnectionService } from './twenty-connection.service';
 import { mapTwentyPersonRecord } from './twenty-person.mapper';
 import { mapOpportunityStageToTwenty } from './twenty-stage.constants';
 import {
+  CreateCompanyInput,
   CreateNoteInput,
   CreateNoteTargetInput,
   CreateOpportunityInput,
+  TwentyCompany,
   TwentyPerson,
   UpdatePersonInput,
 } from './twenty.types';
@@ -190,4 +192,144 @@ export class TwentyClient {
 
     return result.createNoteTarget;
   }
+
+  /**
+   * Find companies by normalized domain (pinned Twenty Links `domainName.primaryLinkUrl`).
+   * Uses ilike contains on the domain host for matching.
+   */
+  async findCompaniesByDomain(tenantId: string, domain: string): Promise<TwentyCompany[]> {
+    const query = gql`
+      query FindCompaniesByDomain($filter: CompanyFilterInput!, $first: Int) {
+        companies(filter: $filter, first: $first) {
+          edges {
+            node {
+              id
+              name
+              domainName {
+                primaryLinkUrl
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const data = await (
+      await this.clientFor(tenantId)
+    ).request<{
+      companies: {
+        edges: Array<{
+          node: {
+            id: string;
+            name?: string | null;
+            domainName?: { primaryLinkUrl?: string | null } | null;
+          };
+        }>;
+      };
+    }>(query, {
+      filter: {
+        domainName: {
+          primaryLinkUrl: { ilike: `%${domain}%` },
+        },
+      },
+      first: 20,
+    });
+
+    return (data.companies?.edges ?? []).map(edge => mapTwentyCompanyRecord(edge.node));
+  }
+
+  /** Name search for POSSIBLE_MATCH when domain exact match is unavailable. */
+  async findCompaniesByName(tenantId: string, name: string): Promise<TwentyCompany[]> {
+    const query = gql`
+      query FindCompaniesByName($filter: CompanyFilterInput!, $first: Int) {
+        companies(filter: $filter, first: $first) {
+          edges {
+            node {
+              id
+              name
+              domainName {
+                primaryLinkUrl
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const data = await (
+      await this.clientFor(tenantId)
+    ).request<{
+      companies: {
+        edges: Array<{
+          node: {
+            id: string;
+            name?: string | null;
+            domainName?: { primaryLinkUrl?: string | null } | null;
+          };
+        }>;
+      };
+    }>(query, {
+      filter: {
+        name: { ilike: `%${name}%` },
+      },
+      first: 20,
+    });
+
+    return (data.companies?.edges ?? []).map(edge => mapTwentyCompanyRecord(edge.node));
+  }
+
+  async createCompany(tenantId: string, input: CreateCompanyInput): Promise<TwentyCompany> {
+    const mutation = gql`
+      mutation CreateCompany($data: CompanyCreateInput!) {
+        createCompany(data: $data) {
+          id
+          name
+          domainName {
+            primaryLinkUrl
+          }
+        }
+      }
+    `;
+
+    const primaryLinkUrl =
+      input.websiteUrl || (input.domain ? `https://${input.domain}` : undefined);
+
+    const result = await (
+      await this.clientFor(tenantId)
+    ).request<{
+      createCompany: {
+        id: string;
+        name?: string | null;
+        domainName?: { primaryLinkUrl?: string | null } | null;
+      };
+    }>(mutation, {
+      data: {
+        name: input.name,
+        ...(primaryLinkUrl
+          ? {
+              domainName: {
+                primaryLinkUrl,
+                primaryLinkLabel: input.domain || input.name,
+              },
+            }
+          : {}),
+      },
+    });
+
+    return mapTwentyCompanyRecord(result.createCompany);
+  }
+}
+
+function mapTwentyCompanyRecord(raw: {
+  id: string;
+  name?: string | null;
+  domainName?: { primaryLinkUrl?: string | null } | null;
+}): TwentyCompany {
+  const websiteUrl = raw.domainName?.primaryLinkUrl ?? null;
+  return {
+    id: raw.id,
+    name: raw.name ?? null,
+    websiteUrl,
+    domain: websiteUrl,
+  };
 }

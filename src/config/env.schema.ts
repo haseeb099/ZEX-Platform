@@ -42,6 +42,7 @@ export const envSchema = Joi.object({
   WEBHOOK_RATE_LIMIT: Joi.number().default(1000),
   /** Force deterministic Company Brain analyzer (also default in NODE_ENV=test). */
   COMPANY_BRAIN_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
+  PROSPECT_DISCOVERY_DETERMINISTIC: Joi.boolean().truthy('true').falsy('false').default(false),
   /** Optional future LLM credentials — unused by deterministic analyzer. */
   OPENAI_API_KEY: Joi.string().allow('').optional(),
 });
