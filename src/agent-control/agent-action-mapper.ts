@@ -132,3 +132,48 @@ export function actionStatusFromAudit(action: string, success: boolean): string 
   }
   return 'recorded';
 }
+
+/**
+ * Conservative latest-effective control mutation per agent.
+ * Only the newest un-undone pause/resume is eligible; undoing it clears eligibility
+ * (older superseded actions are not resurrected).
+ */
+export function computeLatestEligibleControlActions(
+  timeline: Array<{
+    id: string;
+    action: string;
+    after: Record<string, unknown> | null;
+  }>,
+): {
+  undoneOf: Map<string, string>;
+  latestEligibleByAgent: Map<string, string | null>;
+} {
+  const undoneOf = new Map<string, string>();
+  const latestEligibleByAgent = new Map<string, string | null>();
+
+  for (const row of timeline) {
+    const after = row.after;
+    const agentRaw = after?.agentId;
+    const agentId = typeof agentRaw === 'string' ? agentRaw : null;
+
+    if (row.action === 'agent_control_undo') {
+      const undoOf = after?.undoOf;
+      if (typeof undoOf === 'string' && !undoneOf.has(undoOf)) {
+        undoneOf.set(undoOf, row.id);
+      }
+      if (agentId && typeof undoOf === 'string' && latestEligibleByAgent.get(agentId) === undoOf) {
+        latestEligibleByAgent.set(agentId, null);
+      }
+      continue;
+    }
+
+    if (
+      (row.action === 'agent_control_paused' || row.action === 'agent_control_resumed') &&
+      agentId
+    ) {
+      latestEligibleByAgent.set(agentId, row.id);
+    }
+  }
+
+  return { undoneOf, latestEligibleByAgent };
+}

@@ -4,6 +4,7 @@ import {
   isDomainActionReversible,
   mapAuditActionToAgentId,
   permissionKeyForAction,
+  computeLatestEligibleControlActions,
 } from './agent-action-mapper';
 import { getAgentDefinition, listAgentDefinitions } from './agent-registry';
 import { AGENT_CONTROL_VERSION, boundJson, isAgentId } from './agent-control.types';
@@ -67,6 +68,27 @@ describe('agent-control registry + mapper (ZEX-39)', () => {
     expect(permissionKeyForAction('sdr_approval_granted', 'ai_sdr')).toBe('approve_draft');
   });
 
+  it('computes latest-effective control eligibility conservatively', () => {
+    const timeline = [
+      { id: 'A', action: 'agent_control_paused', after: { agentId: 'research_agent' } },
+      { id: 'B', action: 'agent_control_resumed', after: { agentId: 'research_agent' } },
+      { id: 'C', action: 'agent_control_paused', after: { agentId: 'research_agent' } },
+    ];
+    let computed = computeLatestEligibleControlActions(timeline);
+    expect(computed.latestEligibleByAgent.get('research_agent')).toBe('C');
+
+    computed = computeLatestEligibleControlActions([
+      ...timeline,
+      {
+        id: 'U',
+        action: 'agent_control_undo',
+        after: { agentId: 'research_agent', undoOf: 'C' },
+      },
+    ]);
+    expect(computed.latestEligibleByAgent.get('research_agent')).toBeNull();
+    expect(computed.undoneOf.get('C')).toBe('U');
+  });
+
   it('bounds JSON and keeps version constant', () => {
     expect(AGENT_CONTROL_VERSION).toBe('agent-control-v1');
     const big = { a: 'x'.repeat(2000), nested: { secret: 'nope' } };
@@ -99,9 +121,10 @@ describe('agent-control service helpers', () => {
     expect(action).toBeNull();
   });
 
-  it('marks pause audit as reversible and available to undo', async () => {
+  it('marks pause audit as reversible and available only when latest-eligible', async () => {
     const { AgentControlService } = await import('./agent-control.service');
     const service = new AgentControlService({} as never, { log: jest.fn() } as never);
+    const latest = new Map([['research_agent' as const, 'pause1']]);
     const action = service.normalizeAuditToAction(
       {
         id: 'pause1',
@@ -118,11 +141,66 @@ describe('agent-control service helpers', () => {
         createdAt: new Date('2026-09-05T00:00:00.000Z'),
       },
       new Map(),
+      latest,
     );
     expect(action?.agentId).toBe('research_agent');
     expect(action?.reversible).toBe(true);
     expect(action?.undo.status).toBe('available');
     expect(action?.confidence).toBe('not_applicable');
+  });
+
+  it('marks older pause as superseded when a newer control mutation is eligible', async () => {
+    const { AgentControlService } = await import('./agent-control.service');
+    const service = new AgentControlService({} as never, { log: jest.fn() } as never);
+    const latest = new Map([['research_agent' as const, 'pauseC']]);
+    const action = service.normalizeAuditToAction(
+      {
+        id: 'pauseA',
+        tenantId: 't1',
+        action: 'agent_control_paused',
+        resourceType: 'TenantAgentControl',
+        resourceTwentyId: 'c1',
+        before: { agentId: 'research_agent', state: 'ACTIVE' },
+        after: { agentId: 'research_agent', state: 'PAUSED', reversible: true },
+        triggeredBy: 'admin',
+        webhookLogId: null,
+        success: true,
+        message: null,
+        createdAt: new Date('2026-09-05T00:00:00.000Z'),
+      },
+      new Map(),
+      latest,
+    );
+    expect(action?.reversible).toBe(true);
+    expect(action?.undo.status).toBe('superseded');
+  });
+
+  it('marks undone pause as undone even if not latest-eligible', async () => {
+    const { AgentControlService } = await import('./agent-control.service');
+    const service = new AgentControlService({} as never, { log: jest.fn() } as never);
+    const undone = new Map([
+      ['pauseC', { undoActionId: 'undo1', undoneAt: '2026-09-05T01:00:00.000Z' }],
+    ]);
+    const action = service.normalizeAuditToAction(
+      {
+        id: 'pauseC',
+        tenantId: 't1',
+        action: 'agent_control_paused',
+        resourceType: 'TenantAgentControl',
+        resourceTwentyId: 'c1',
+        before: { agentId: 'research_agent', state: 'ACTIVE' },
+        after: { agentId: 'research_agent', state: 'PAUSED', reversible: true },
+        triggeredBy: 'admin',
+        webhookLogId: null,
+        success: true,
+        message: null,
+        createdAt: new Date('2026-09-05T00:30:00.000Z'),
+      },
+      undone,
+      new Map([['research_agent' as const, null]]),
+    );
+    expect(action?.undo.status).toBe('undone');
+    expect(action?.undo.undoneByActionId).toBe('undo1');
   });
 
   it('never fabricates confidence for send audits without confidence field', async () => {

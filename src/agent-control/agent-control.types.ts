@@ -59,11 +59,16 @@ export type AgentActionEvidence = {
   doNotClaim?: string[] | null;
 };
 
+export type UndoStatus = 'none' | 'available' | 'undone' | 'superseded' | 'not_reversible';
+
 export type UndoState = {
-  status: 'none' | 'available' | 'undone' | 'not_reversible';
+  status: UndoStatus;
   undoneByActionId?: string | null;
   undoneAt?: string | null;
 };
+
+/** Max AuditLog rows scanned for agent-action history pagination (newest first). */
+export const AGENT_ACTION_HISTORY_WINDOW = 500;
 
 export type AgentAction = {
   id: string;

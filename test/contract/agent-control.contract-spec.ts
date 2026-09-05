@@ -431,30 +431,138 @@ describe('Agent Control Center contract (ZEX-39)', () => {
     });
     expect(draftsAfter).toBe(draftsBefore); // no adaptation drafts while paused
 
-    // --- Undo pause ---
-    // Re-pause research for clean undo of pauseResearchActionId (already resumed earlier)
-    // Undo the original pause action should restore ACTIVE (idempotent path if already matching)
-    const undoPause = await admin(
+    // --- Stale-undo safety (latest-effective only) ---
+    // Existing timeline already has pauseResearchActionId then resume → A is superseded.
+    const undoStaleA0 = await admin(
       'POST',
       `/api/v1/admin/tenants/${tenantA}/agent-actions/${pauseResearchActionId}/undo`,
       {},
     );
-    expect(undoPause.statusCode).toBe(200);
-    expect(undoPause.body.undone).toBe(true);
-    expect(undoPause.body.state).toBe('ACTIVE');
+    expect(undoStaleA0.statusCode).toBe(409);
+    expect(
+      (
+        await prisma.tenantAgentControl.findUnique({
+          where: { tenantId_agentId: { tenantId: tenantA, agentId: 'research_agent' } },
+        })
+      )?.state,
+    ).toBe('ACTIVE');
 
-    const undoAgain = await admin(
-      'POST',
-      `/api/v1/admin/tenants/${tenantA}/agent-actions/${pauseResearchActionId}/undo`,
-      {},
-    );
-    expect(undoAgain.statusCode).toBe(200);
-    expect(undoAgain.body.idempotent).toBe(true);
-
-    const undoAudits = await prisma.auditLog.findMany({
+    const undoAuditsBefore = await prisma.auditLog.count({
       where: { tenantId: tenantA, action: 'agent_control_undo' },
     });
-    expect(undoAudits.length).toBeGreaterThanOrEqual(1);
+
+    // A pause → B resume → C pause
+    const pauseA = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agents/research_agent/pause`,
+      {},
+    );
+    const actionA = String(pauseA.body.actionId);
+    const resumeB = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agents/research_agent/resume`,
+      {},
+    );
+    const actionB = String(resumeB.body.actionId);
+    const pauseC = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agents/research_agent/pause`,
+      {},
+    );
+    const actionC = String(pauseC.body.actionId);
+    expect(pauseC.body.state).toBe('PAUSED');
+
+    // undo A → superseded
+    const undoA = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agent-actions/${actionA}/undo`,
+      {},
+    );
+    expect(undoA.statusCode).toBe(409);
+    expect(
+      (
+        await prisma.tenantAgentControl.findUnique({
+          where: { tenantId_agentId: { tenantId: tenantA, agentId: 'research_agent' } },
+        })
+      )?.state,
+    ).toBe('PAUSED');
+
+    // undo B → superseded
+    const undoB = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agent-actions/${actionB}/undo`,
+      {},
+    );
+    expect(undoB.statusCode).toBe(409);
+    expect(
+      (
+        await prisma.tenantAgentControl.findUnique({
+          where: { tenantId_agentId: { tenantId: tenantA, agentId: 'research_agent' } },
+        })
+      )?.state,
+    ).toBe('PAUSED');
+
+    expect(
+      await prisma.auditLog.count({
+        where: { tenantId: tenantA, action: 'agent_control_undo' },
+      }),
+    ).toBe(undoAuditsBefore); // no false undo audits for A/B
+
+    // undo C → succeeds, restores ACTIVE
+    const undoC = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agent-actions/${actionC}/undo`,
+      {},
+    );
+    expect(undoC.statusCode).toBe(200);
+    expect(undoC.body.undone).toBe(true);
+    expect(undoC.body.idempotent).toBe(false);
+    expect(undoC.body.state).toBe('ACTIVE');
+    expect(
+      (
+        await prisma.tenantAgentControl.findUnique({
+          where: { tenantId_agentId: { tenantId: tenantA, agentId: 'research_agent' } },
+        })
+      )?.state,
+    ).toBe('ACTIVE');
+
+    const undoAuditsAfterC = await prisma.auditLog.count({
+      where: { tenantId: tenantA, action: 'agent_control_undo' },
+    });
+    expect(undoAuditsAfterC).toBe(undoAuditsBefore + 1);
+
+    // Idempotent second undo of C
+    const undoCAgain = await admin(
+      'POST',
+      `/api/v1/admin/tenants/${tenantA}/agent-actions/${actionC}/undo`,
+      {},
+    );
+    expect(undoCAgain.statusCode).toBe(200);
+    expect(undoCAgain.body.idempotent).toBe(true);
+    expect(undoCAgain.body.state).toBe('ACTIVE');
+    expect(
+      await prisma.auditLog.count({
+        where: { tenantId: tenantA, action: 'agent_control_undo' },
+      }),
+    ).toBe(undoAuditsBefore + 1);
+
+    // History undo states
+    const hist = await admin(
+      'GET',
+      `/api/v1/admin/tenants/${tenantA}/agent-actions?agentId=research_agent&limit=50`,
+    );
+    expect(hist.body.historyWindowLimit).toBe(500);
+    const histActions = hist.body.actions as Array<{
+      id: string;
+      reversible: boolean;
+      undo: { status: string };
+      actionType: string;
+    }>;
+    const byId = Object.fromEntries(histActions.map(a => [a.id, a]));
+    expect(byId[actionA]?.undo.status).toBe('superseded');
+    expect(byId[actionA]?.reversible).toBe(true);
+    expect(byId[actionB]?.undo.status).toBe('superseded');
+    expect(byId[actionC]?.undo.status).toBe('undone');
 
     // Irreversible: sent email
     const sentAudit = await prisma.auditLog.findFirst({
@@ -470,6 +578,13 @@ describe('Agent Control Center contract (ZEX-39)', () => {
         )
       ).statusCode,
     ).toBe(400);
+    const sentHist = histActions.find(a => a.actionType === 'sdr_sent');
+    // may be outside research filter — check global list
+    const allHist = await admin('GET', `/api/v1/admin/tenants/${tenantA}/agent-actions?limit=100`);
+    const sentAction = (allHist.body.actions as typeof histActions).find(
+      a => a.id === sentAudit!.id,
+    );
+    expect(sentAction?.undo.status).toBe('not_reversible');
 
     // Book meeting then refuse undo
     await admin('POST', `/api/v1/admin/tenants/${tenantA}/agents/ai_sdr/resume`, {});
@@ -514,7 +629,7 @@ describe('Agent Control Center contract (ZEX-39)', () => {
     expect(
       (await admin('POST', `/api/v1/admin/tenants/${tenantB}/agents/ai_sdr/pause`, {})).statusCode,
     ).toBe(200);
-    // Tenant B cannot undo Tenant A action
+    // Tenant B cannot undo Tenant A action (latest or stale)
     expect(
       (
         await admin(
@@ -523,6 +638,10 @@ describe('Agent Control Center contract (ZEX-39)', () => {
           {},
         )
       ).statusCode,
+    ).toBe(404);
+    expect(
+      (await admin('POST', `/api/v1/admin/tenants/${tenantB}/agent-actions/${actionC}/undo`, {}))
+        .statusCode,
     ).toBe(404);
     // Tenant B agents overview must not leak Tenant A actions
     const bActions = await admin('GET', `/api/v1/admin/tenants/${tenantB}/agent-actions`);

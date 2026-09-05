@@ -1,10 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { AuditLog } from '@prisma/client';
 import { AuditService } from '@src/audit/audit.service';
 import { PrismaService } from '@src/common/prisma/prisma.service';
 import { redactSecrets } from '@src/common/redact-secrets';
 import {
   actionStatusFromAudit,
+  computeLatestEligibleControlActions,
   deriveApprovalState,
   isControlMutationReversible,
   isDomainActionReversible,
@@ -13,6 +19,7 @@ import {
 } from './agent-action-mapper';
 import { getAgentDefinition, listAgentDefinitions } from './agent-registry';
 import {
+  AGENT_ACTION_HISTORY_WINDOW,
   AGENT_CONTROL_VERSION,
   AgentAction,
   AgentControlOverviewResponse,
@@ -27,6 +34,11 @@ import {
 } from './agent-control.types';
 
 const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const CONTROL_TIMELINE_ACTIONS = [
+  'agent_control_paused',
+  'agent_control_resumed',
+  'agent_control_undo',
+] as const;
 
 @Injectable()
 export class AgentControlService {
@@ -90,31 +102,32 @@ export class AgentControlService {
 
   async listActions(tenantId: string, opts: { agentId?: AgentId; limit: number; offset: number }) {
     await this.assertTenant(tenantId);
+    // Finite newest-first scan window — `total` is count within this window after mapping, not global.
     const logs = await this.prisma.auditLog.findMany({
       where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(opts.limit * 4, 400),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: AGENT_ACTION_HISTORY_WINDOW,
       skip: 0,
     });
 
-    const undoneMap = await this.loadUndoMap(
-      tenantId,
-      logs.map(l => l.id),
-    );
+    const { undoneMap, latestEligibleByAgent } = await this.loadControlUndoContext(tenantId);
     let actions = logs
-      .map(log => this.normalizeAuditToAction(log, undoneMap))
+      .map(log => this.normalizeAuditToAction(log, undoneMap, latestEligibleByAgent))
       .filter((a): a is AgentAction => a !== null);
 
     if (opts.agentId) {
       actions = actions.filter(a => a.agentId === opts.agentId);
     }
 
-    const total = actions.length;
+    const totalInWindow = actions.length;
     const page = actions.slice(opts.offset, opts.offset + opts.limit);
     return {
       version: AGENT_CONTROL_VERSION,
       tenantId,
-      total,
+      /** Count of mapped agent actions inside the scanned history window (not a global DB total). */
+      total: totalInWindow,
+      historyWindowLimit: AGENT_ACTION_HISTORY_WINDOW,
+      historyWindowComplete: logs.length < AGENT_ACTION_HISTORY_WINDOW,
       limit: opts.limit,
       offset: opts.offset,
       actions: page,
@@ -236,8 +249,9 @@ export class AgentControlService {
   }
 
   /**
-   * Undo a reversible agent-control pause/resume mutation.
-   * Idempotent: second undo returns the prior undo result without mutating again.
+   * Undo the latest effective reversible agent-control pause/resume mutation.
+   * Superseded historical control mutations are rejected (409) — they must not
+   * overwrite newer user intent. Second undo of the same action is idempotent.
    */
   async undoAction(tenantId: string, actionId: string, triggeredBy = 'admin-api') {
     await this.assertTenant(tenantId);
@@ -268,18 +282,8 @@ export class AgentControlService {
       throw new BadRequestException('Control action missing agentId');
     }
 
-    const undoRows = await this.prisma.auditLog.findMany({
-      where: {
-        tenantId,
-        action: 'agent_control_undo',
-      },
-      orderBy: { createdAt: 'asc' },
-      take: 500,
-    });
-    const existingUndo = undoRows.find(row => {
-      const a = row.after as Record<string, unknown> | null;
-      return a?.undoOf === actionId;
-    });
+    const { undoneMap, latestEligibleByAgent } = await this.loadControlUndoContext(tenantId);
+    const existingUndo = undoneMap.get(actionId);
 
     if (existingUndo) {
       const current = await this.getControlState(tenantId, agentId);
@@ -287,10 +291,17 @@ export class AgentControlService {
         undone: true,
         idempotent: true,
         actionId,
-        undoActionId: existingUndo.id,
+        undoActionId: existingUndo.undoActionId,
         agentId,
         state: current,
       };
+    }
+
+    const latestEligible = latestEligibleByAgent.get(agentId) ?? null;
+    if (latestEligible !== actionId) {
+      throw new ConflictException(
+        `Action ${actionId} is superseded by a newer control mutation for ${agentId}; only the latest effective pause/resume may be undone`,
+      );
     }
 
     const beforeState = (log.before as Record<string, unknown> | null)?.state;
@@ -463,16 +474,13 @@ export class AgentControlService {
   ): Promise<AgentAction[]> {
     const logs = await this.prisma.auditLog.findMany({
       where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: AGENT_ACTION_HISTORY_WINDOW,
     });
-    const undoneMap = await this.loadUndoMap(
-      tenantId,
-      logs.map(l => l.id),
-    );
+    const { undoneMap, latestEligibleByAgent } = await this.loadControlUndoContext(tenantId);
     const actions: AgentAction[] = [];
     for (const log of logs) {
-      const action = this.normalizeAuditToAction(log, undoneMap);
+      const action = this.normalizeAuditToAction(log, undoneMap, latestEligibleByAgent);
       if (!action || action.agentId !== agentId) continue;
       actions.push(action);
       if (actions.length >= limit) break;
@@ -480,38 +488,57 @@ export class AgentControlService {
     return actions;
   }
 
-  private async loadUndoMap(
-    tenantId: string,
-    actionIds: string[],
-  ): Promise<Map<string, { undoActionId: string; undoneAt: string }>> {
-    const map = new Map<string, { undoActionId: string; undoneAt: string }>();
-    if (actionIds.length === 0) return map;
-
-    const undos = await this.prisma.auditLog.findMany({
+  /**
+   * Load undo map + latest-effective pause/resume id per agent.
+   * Conservative rule: only the newest un-undone pause/resume is eligible;
+   * undoing it clears eligibility (older actions stay superseded).
+   */
+  async loadControlUndoContext(tenantId: string): Promise<{
+    undoneMap: Map<string, { undoActionId: string; undoneAt: string }>;
+    latestEligibleByAgent: Map<AgentId, string | null>;
+  }> {
+    const controlLogs = await this.prisma.auditLog.findMany({
       where: {
         tenantId,
-        action: 'agent_control_undo',
+        action: { in: [...CONTROL_TIMELINE_ACTIONS] },
       },
-      orderBy: { createdAt: 'asc' },
-      take: 500,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: 2000,
     });
 
-    for (const u of undos) {
-      const after = u.after as Record<string, unknown> | null;
-      const undoOf = after?.undoOf;
-      if (typeof undoOf === 'string' && !map.has(undoOf)) {
-        map.set(undoOf, {
-          undoActionId: u.id,
-          undoneAt: u.createdAt.toISOString(),
-        });
-      }
+    const computed = computeLatestEligibleControlActions(
+      controlLogs.map(row => ({
+        id: row.id,
+        action: row.action,
+        after: (row.after as Record<string, unknown> | null) || null,
+      })),
+    );
+
+    const undoneMap = new Map<string, { undoActionId: string; undoneAt: string }>();
+    const undoTimes = new Map(
+      controlLogs
+        .filter(r => r.action === 'agent_control_undo')
+        .map(r => [r.id, r.createdAt.toISOString()] as const),
+    );
+    for (const [actionId, undoActionId] of computed.undoneOf) {
+      undoneMap.set(actionId, {
+        undoActionId,
+        undoneAt: undoTimes.get(undoActionId) ?? new Date(0).toISOString(),
+      });
     }
-    return map;
+
+    const latestEligibleByAgent = new Map<AgentId, string | null>();
+    for (const [agentId, latestId] of computed.latestEligibleByAgent) {
+      if (isAgentId(agentId)) latestEligibleByAgent.set(agentId, latestId);
+    }
+
+    return { undoneMap, latestEligibleByAgent };
   }
 
   normalizeAuditToAction(
     log: AuditLog,
     undoneMap: Map<string, { undoActionId: string; undoneAt: string }>,
+    latestEligibleByAgent: Map<AgentId, string | null> = new Map(),
   ): AgentAction | null {
     const afterRaw = (log.after as Record<string, unknown> | null) || null;
     const beforeRaw = (log.before as Record<string, unknown> | null) || null;
@@ -525,11 +552,9 @@ export class AgentControlService {
     const agentId = mapAuditActionToAgentId(log.action, afterRaw);
     // Unmapped audit rows must not be falsely attributed
     if (!agentId && !log.action.startsWith('agent_control_')) {
-      // Still skip unknown prefixes entirely from Control Center feed
       if (!log.action.startsWith('research_') && !log.action.startsWith('sdr_')) {
         return null;
       }
-      // Unknown research_/sdr_ variant — do not attribute
       return null;
     }
 
@@ -537,11 +562,13 @@ export class AgentControlService {
     const undoRecord = undoneMap.get(log.id);
     let undoStatus: AgentAction['undo']['status'] = 'not_reversible';
     if (reversible) {
-      undoStatus = undoRecord ? 'undone' : 'available';
-    } else if (log.action === 'agent_control_undo') {
-      undoStatus = 'not_reversible';
-    } else {
-      undoStatus = 'not_reversible';
+      if (undoRecord) {
+        undoStatus = 'undone';
+      } else if (agentId && (latestEligibleByAgent.get(agentId) ?? null) === log.id) {
+        undoStatus = 'available';
+      } else {
+        undoStatus = 'superseded';
+      }
     }
 
     const confidence = this.extractConfidence(log.action, afterRaw);

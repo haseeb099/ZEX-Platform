@@ -154,13 +154,47 @@ Only **agent control** mutations are reversible in v1:
 - pause → undo restores previous control state (typically `ACTIVE`)
 - resume → undo restores previous control state (typically `PAUSED`)
 
+### Latest-effective eligibility (required)
+
+Only the **latest effective un-undone** pause/resume for a tenant + agent may be undone.
+
+Timeline example:
+
+```text
+A pause → PAUSED
+B resume → ACTIVE
+C pause → PAUSED
+undo A → 409 Conflict (superseded)
+undo B → 409 Conflict (superseded)
+undo C → succeeds (restores ACTIVE)
+```
+
+After undoing C, older A/B stay **superseded** (conservative: no multi-level undo stack / no resurrection).
+
+Server enforces this before mutating `TenantAgentControl` or writing undo audit. UI visibility is not the safety gate.
+
+### Undo status in action history
+
+| `undo.status` | Meaning |
+|---------------|---------|
+| `available` | Latest effective pause/resume; may be undone |
+| `undone` | Already undone (idempotent second undo) |
+| `superseded` | Historical pause/resume replaced by newer control activity |
+| `not_reversible` | Domain / control-undo events that cannot be undone |
+
+`reversible: true` may still appear on historical pause/resume rows (mutation class), but `undo.status` must be `superseded` when not currently eligible.
+
 Rules:
 
 - Tenant-scoped
-- Idempotent second undo
-- Rejects irreversible / unknown / cross-tenant actions
+- Idempotent second undo of the same action
+- Rejects superseded (`409`), irreversible / unknown / cross-tenant actions
 - Writes new `agent_control_undo` audit (history preserved; original rows never deleted)
 - Never unsends email, rolls back CRM, cancels/books meetings, or reverses reply handling
+
+### Action history pagination
+
+`GET .../agent-actions` scans a finite newest-first window (`historyWindowLimit`, default 500 AuditLog rows). Response `total` is the mapped count **within that window**, not a global DB total. `historyWindowComplete: true` means fewer raw rows than the window were found.
 
 ### Reversible
 
@@ -175,6 +209,7 @@ Rules:
 - `research_completed` / findings
 - CRM creates / sync completions
 - Draft approvals / rejects
+- Superseded historical pause/resume (reject undo; do not mutate)
 
 ## Tenant isolation
 
