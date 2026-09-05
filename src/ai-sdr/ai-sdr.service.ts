@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, SdrApproval, SdrDraft, SdrMessage, SdrSequence } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { AgentControlService } from '@src/agent-control/agent-control.service';
 import { AuditService } from '@src/audit/audit.service';
 import { PrismaService } from '@src/common/prisma/prisma.service';
 import { AI_SDR_CRM_SYNC_QUEUE, AI_SDR_SEND_QUEUE } from '@src/jobs/jobs.constants';
@@ -32,6 +33,7 @@ export class AiSdrService {
     private readonly checkpoints: JobActionCheckpointService,
     private readonly twenty: TwentyClient,
     private readonly config: ConfigService,
+    private readonly agentControl: AgentControlService,
     @InjectQueue(AI_SDR_SEND_QUEUE) private readonly sendQueue: Queue,
     @InjectQueue(AI_SDR_CRM_SYNC_QUEUE) private readonly crmQueue: Queue,
   ) {}
@@ -47,6 +49,9 @@ export class AiSdrService {
     } = {},
     triggeredBy = 'admin-api',
   ) {
+    // ZEX-39: pause blocks new SDR outbound progression (not reply safety)
+    await this.agentControl.assertAgentNotPaused(tenantId, 'ai_sdr', triggeredBy);
+
     const candidate = await this.requireCandidate(tenantId, candidateId);
     if (!RESEARCHABLE.has(candidate.status)) {
       throw new BadRequestException(
@@ -111,6 +116,9 @@ export class AiSdrService {
     input: { purpose?: DraftPurpose } = {},
     triggeredBy = 'admin-api',
   ) {
+    // ZEX-39: pause blocks new draft generation (reply ingestion skips this when paused)
+    await this.agentControl.assertAgentNotPaused(tenantId, 'ai_sdr', triggeredBy);
+
     const sequence = await this.requireSequence(tenantId, sequenceId);
     if (STOP_STATUSES.has(sequence.status) && sequence.status !== 'REPLIED') {
       // REPLIED may create reply/meeting drafts; CANCELLED etc. blocked
@@ -449,6 +457,9 @@ export class AiSdrService {
       return this.executeSend({ tenantId, draftId, fixture: input.fixture, triggeredBy });
     }
 
+    // ZEX-39: pause blocks new outbound sends (human approvals still stored; send gated)
+    await this.agentControl.assertAgentNotPaused(tenantId, 'ai_sdr', triggeredBy);
+
     // Validate gates early so async queue fails closed at request time too
     await this.assertSendAllowed(tenantId, draftId);
 
@@ -473,6 +484,9 @@ export class AiSdrService {
     triggeredBy: string;
   }) {
     const { tenantId, draftId, triggeredBy } = input;
+
+    // ZEX-39: re-check pause at send execution
+    await this.agentControl.assertAgentNotPaused(tenantId, 'ai_sdr', triggeredBy);
 
     // Full re-check at execution time
     const gate = await this.assertSendAllowed(tenantId, draftId);
@@ -787,11 +801,16 @@ export class AiSdrService {
       });
     }
 
-    // Adapt: generate suggested reply/meeting drafts for POSITIVE/QUESTION — still need approval
+    // Adapt: generate suggested reply/meeting drafts for POSITIVE/QUESTION — still need approval.
+    // ZEX-39: when AI SDR is paused, still stop/cancel on reply+unsubscribe, but do not
+    // continue agent-generated draft progression.
     if (event.classification === 'POSITIVE' || event.classification === 'QUESTION') {
-      await this.createDraft(tenantId, sequence.id, { purpose: 'reply' }, triggeredBy);
-      if (event.classification === 'POSITIVE') {
-        await this.createDraft(tenantId, sequence.id, { purpose: 'meeting' }, triggeredBy);
+      const paused = await this.agentControl.isPaused(tenantId, 'ai_sdr');
+      if (!paused) {
+        await this.createDraft(tenantId, sequence.id, { purpose: 'reply' }, triggeredBy);
+        if (event.classification === 'POSITIVE') {
+          await this.createDraft(tenantId, sequence.id, { purpose: 'meeting' }, triggeredBy);
+        }
       }
     }
 

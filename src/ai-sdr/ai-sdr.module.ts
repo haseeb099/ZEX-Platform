@@ -1,5 +1,6 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
+import { AgentControlModule } from '@src/agent-control/agent-control.module';
 import { AuditModule } from '@src/audit/audit.module';
 import { JobActionCheckpointService } from '@src/jobs/job-action-checkpoint.service';
 import { AI_SDR_CRM_SYNC_QUEUE, AI_SDR_SEND_QUEUE } from '@src/jobs/jobs.constants';
@@ -24,6 +25,7 @@ import {
     AuditModule,
     ResearchAgentModule,
     TwentyModule,
+    AgentControlModule,
   ],
   controllers: [AiSdrController, AiSdrReplyWebhookController],
   providers: [

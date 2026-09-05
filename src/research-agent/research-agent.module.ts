@@ -1,5 +1,6 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
+import { AgentControlModule } from '@src/agent-control/agent-control.module';
 import { AuditModule } from '@src/audit/audit.module';
 import { CompanyBrainModule } from '@src/company-brain/company-brain.module';
 import { PROSPECT_RESEARCH_QUEUE } from '@src/jobs/jobs.constants';
@@ -18,6 +19,7 @@ import { ResearchAgentService } from './research-agent.service';
     BullModule.registerQueue({ name: PROSPECT_RESEARCH_QUEUE }),
     AuditModule,
     CompanyBrainModule,
+    AgentControlModule,
   ],
   controllers: [ResearchAgentController],
   providers: [

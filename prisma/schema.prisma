@@ -37,10 +37,30 @@ model Tenant {
   prospectDiscoveryRuns ProspectDiscoveryRun[]
   prospectResearchRuns  ProspectResearchRun[]
   sdrSequences          SdrSequence[]
+  agentControls         TenantAgentControl[]
 
   @@index([slug])
   @@index([status])
   @@index([deletedAt])
+}
+
+/// Per-tenant agent runtime control (pause/resume). ZEX-39 Agent Control Center.
+/// Default absent row = ACTIVE. Only pause/resume control mutations are reversible.
+model TenantAgentControl {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// research_agent | ai_sdr
+  agentId   String
+  /// ACTIVE | PAUSED
+  state     String   @default("ACTIVE")
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, agentId])
+  @@index([tenantId])
+  @@index([tenantId, state])
 }
 
 /// Per-tenant Twenty CRM deployment connection (1:1 with Tenant for v1).

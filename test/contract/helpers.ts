@@ -103,6 +103,7 @@ export async function deleteTenantCascade(prisma: PrismaService, tenantId: strin
   await prisma.sdrDraft.deleteMany({ where: { tenantId } });
   await prisma.sdrMeetingBooking.deleteMany({ where: { tenantId } });
   await prisma.sdrSequence.deleteMany({ where: { tenantId } });
+  await prisma.tenantAgentControl.deleteMany({ where: { tenantId } });
   await prisma.jobActionCheckpoint.deleteMany({ where: { tenantId } });
   await prisma.webhookLog.deleteMany({ where: { tenantId } });
   await prisma.scoreHistory.deleteMany({ where: { tenantId } });
