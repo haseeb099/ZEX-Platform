@@ -10,7 +10,7 @@ Admin API key required (CRM server proxies; browser never sees the key).
 
 Also:
 
-- `GET /api/v1/admin/tenants/by-workspace/:workspaceId` — resolve Platform `tenantId` from Twenty workspace id
+- `GET /api/v1/admin/tenants/by-workspace/:workspaceId` — resolve Platform `tenantId` from Twenty workspace id (fail-closed: exactly one active non-deleted `TwentyConnection`; ambiguous duplicates → `409`; unknown → `404`)
 - `POST /api/v1/admin/tenants/:tenantId/sdr/drafts/:draftId/reject` — durable draft `REJECTED`
 
 ## Prioritization (deterministic)
