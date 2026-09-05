@@ -15,25 +15,44 @@ Also:
 
 ## Prioritization (deterministic)
 
-Higher `rankScore` first:
+**Type precedence is absolute.** Downstream action types always outrank upstream ones, regardless of Why-Now / overall score:
 
-| Type | Base rank | Priority label |
-|------|-----------|----------------|
+```text
+meeting_opportunity
+>
+reply_review
+>
+sdr_draft_approval
+>
+workflow_blocked
+>
+prospect_approval
+```
+
+| Type | `TYPE_RANK` / `rankScore` | Priority label |
+|------|---------------------------|----------------|
 | `meeting_opportunity` | 1000 | critical |
 | `reply_review` | 900 | critical |
 | `sdr_draft_approval` | 700 | high |
 | `workflow_blocked` | 600 | high |
 | `prospect_approval` | 400 | medium |
 
-Plus `min(100, overallScore) * 2` boost from latest Why-Now snapshot when present.
+**Why-Now score only orders within the same action tier/type.** It must never cross type boundaries (e.g. a reply with score 100 cannot outrank a meeting with score 0).
 
-Tie-break: overall score ↓, `updatedAt` ↓, stable `id` ↑.
+Sort and dedupe use explicit comparison dimensions (not a single overlapping numeric blend):
+
+1. `TYPE_RANK` (absolute)
+2. overall / Why-Now `score` (within tier)
+3. `updatedAt` (newer first)
+4. stable `id` (ascending)
+
+`rankScore` in the API mirrors `TYPE_RANK` only (UI/debug). It does not include score boosts.
 
 ## Dedupe
 
-One card per `prospectCandidateId`. Downstream wins (meeting > reply > draft approval > blocked > prospect).
+One card per `prospectCandidateId`. **Downstream-wins** semantics: keep the item that ranks higher under the same comparison as feed sort (type → score → `updatedAt` → `id`).
 
-Example: high Why-Now + research ready + SDR draft awaiting approval → single **Approve outreach draft** card.
+Example: high Why-Now + research ready + SDR draft awaiting approval → single **Approve outreach draft** card (draft beats prospect; meeting/reply would beat draft).
 
 ## Evidence
 

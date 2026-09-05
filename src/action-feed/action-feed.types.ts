@@ -26,7 +26,7 @@ export const ACTION_FEED_ITEM_TYPES = [
 export type ActionFeedItemType = (typeof ACTION_FEED_ITEM_TYPES)[number];
 
 /**
- * Deterministic ranking weights (higher = more urgent).
+ * Absolute type precedence (higher = wins). Why-Now score must never cross these tiers.
  * Ordering docs: docs/ACTION_FEED_V1.md
  */
 export const TYPE_RANK: Record<ActionFeedItemType, number> = {
@@ -57,7 +57,10 @@ export type ActionFeedItem = {
   id: string;
   type: ActionFeedItemType;
   priority: ActionPriority;
-  /** Sort key only — higher first. Not shown as ML score. */
+  /**
+   * Type-tier mirror of TYPE_RANK for UI/debug only.
+   * Never fold Why-Now score into this — sort/dedupe use compareActionFeedItems.
+   */
   rankScore: number;
   score?: number | null;
   title: string;
@@ -97,7 +100,33 @@ export const actionFeedQuerySchema = z.object({
 });
 
 /**
- * Downstream-wins dedupe: when multiple items share a prospect, keep the highest TYPE_RANK.
+ * Explicit ranking dimensions (never collapse type + score into one overlapping number):
+ * 1. TYPE_RANK (absolute)
+ * 2. Why-Now / overall score (within same type only)
+ * 3. updatedAt (newer first)
+ * 4. stable id (asc)
+ *
+ * Negative => a ranks above b; positive => b ranks above a.
+ */
+export function compareActionFeedItems(a: ActionFeedItem, b: ActionFeedItem): number {
+  const typeA = TYPE_RANK[a.type];
+  const typeB = TYPE_RANK[b.type];
+  if (typeB !== typeA) return typeB - typeA;
+
+  const scoreA = a.score ?? -1;
+  const scoreB = b.score ?? -1;
+  if (scoreB !== scoreA) return scoreB - scoreA;
+
+  const tA = Date.parse(a.updatedAt) || 0;
+  const tB = Date.parse(b.updatedAt) || 0;
+  if (tB !== tA) return tB - tA;
+
+  return a.id.localeCompare(b.id);
+}
+
+/**
+ * Downstream-wins dedupe: when multiple items share a prospect, keep the higher-precedence
+ * item via compareActionFeedItems (type > score > updatedAt > id).
  */
 export function dedupeByProspect(items: ActionFeedItem[]): ActionFeedItem[] {
   const byProspect = new Map<string, ActionFeedItem>();
@@ -110,7 +139,7 @@ export function dedupeByProspect(items: ActionFeedItem[]): ActionFeedItem[] {
       continue;
     }
     const existing = byProspect.get(key);
-    if (!existing || item.rankScore > existing.rankScore) {
+    if (!existing || compareActionFeedItems(item, existing) < 0) {
       byProspect.set(key, item);
     }
   }
@@ -118,16 +147,7 @@ export function dedupeByProspect(items: ActionFeedItem[]): ActionFeedItem[] {
   return [...byProspect.values(), ...withoutProspect];
 }
 
-/** Stable sort: rankScore desc, overall score desc, updatedAt desc, id asc. */
+/** Stable sort using the same precedence as dedupe. */
 export function sortActionFeedItems(items: ActionFeedItem[]): ActionFeedItem[] {
-  return [...items].sort((a, b) => {
-    if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
-    const scoreA = a.score ?? -1;
-    const scoreB = b.score ?? -1;
-    if (scoreB !== scoreA) return scoreB - scoreA;
-    const tA = Date.parse(a.updatedAt) || 0;
-    const tB = Date.parse(b.updatedAt) || 0;
-    if (tB !== tA) return tB - tA;
-    return a.id.localeCompare(b.id);
-  });
+  return [...items].sort(compareActionFeedItems);
 }

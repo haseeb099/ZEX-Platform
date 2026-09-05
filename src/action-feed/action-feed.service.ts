@@ -373,7 +373,6 @@ export class ActionFeedService {
       const score = scores.get(c.id);
       const overall = score?.overallScore ?? c.fitScore ?? 0;
       const type: ActionFeedItemType = 'prospect_approval';
-      // Boost high Why-Now into high priority band via rankScore (+ overall*2 in item())
       return this.item({
         type,
         entityId: c.id,
@@ -415,13 +414,12 @@ export class ActionFeedService {
     updatedAt: Date;
     preview?: Record<string, unknown> | null;
   }): ActionFeedItem {
-    const base = TYPE_RANK[input.type];
-    const scoreBoost = Math.max(0, Math.min(100, input.score ?? 0)) * 2;
+    // rankScore is type-tier only (debug/UI). Score sorts within tier via compareActionFeedItems.
     return {
       id: `${input.type}:${input.entityId}`,
       type: input.type,
       priority: PRIORITY_FROM_TYPE[input.type],
-      rankScore: base + scoreBoost,
+      rankScore: TYPE_RANK[input.type],
       score: input.score ?? null,
       title: input.title,
       summary: input.summary,
