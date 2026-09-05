@@ -1,3 +1,4 @@
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CryptoService } from '@src/common/crypto.service';
 import { TwentyConnectionService } from '@src/twenty/twenty-connection.service';
@@ -38,6 +39,10 @@ describe('TenantService', () => {
       tenant: {
         create: jest.fn().mockResolvedValue(createdTenant),
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      twentyConnection: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
       enrichmentProvider: {
         create: jest.fn().mockResolvedValue({}),
@@ -204,5 +209,176 @@ describe('TenantService', () => {
     expect(crypto.decrypt(createArgs.data.twentyConnection.create.webhookSecret)).toBe(
       'whsec_legacy',
     );
+  });
+
+  describe('resolveByTwentyWorkspaceId (fail-closed)', () => {
+    it('one active mapping → tenant resolved', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([
+        {
+          tenantId: 'tenant_a',
+          workspaceId: 'ws_1',
+          status: 'active',
+          tenant: { id: 'tenant_a', deletedAt: null },
+        },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_1')).resolves.toEqual({
+        tenantId: 'tenant_a',
+        workspaceId: 'ws_1',
+      });
+      expect(prisma.tenant.findMany).not.toHaveBeenCalled();
+    });
+
+    it('zero mapping → 404', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([]);
+      prisma.tenant.findMany.mockResolvedValue([]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('two active mappings for same workspace → fail closed', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([
+        {
+          tenantId: 'tenant_b',
+          workspaceId: 'ws_dup',
+          status: 'active',
+          tenant: { id: 'tenant_b', deletedAt: null },
+        },
+        {
+          tenantId: 'tenant_a',
+          workspaceId: 'ws_dup',
+          status: 'active',
+          tenant: { id: 'tenant_a', deletedAt: null },
+        },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_dup')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      try {
+        await service.resolveByTwentyWorkspaceId('ws_dup');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConflictException);
+        const body = (err as ConflictException).getResponse() as {
+          tenantIds: string[];
+          workspaceId: string;
+        };
+        expect(body.workspaceId).toBe('ws_dup');
+        expect(body.tenantIds).toEqual(['tenant_a', 'tenant_b']);
+      }
+      expect(prisma.tenant.findMany).not.toHaveBeenCalled();
+    });
+
+    it('active mapping + deleted tenant mapping → valid non-deleted wins', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([
+        {
+          tenantId: 'tenant_dead',
+          workspaceId: 'ws_1',
+          status: 'active',
+          tenant: { id: 'tenant_dead', deletedAt: new Date() },
+        },
+        {
+          tenantId: 'tenant_live',
+          workspaceId: 'ws_1',
+          status: 'active',
+          tenant: { id: 'tenant_live', deletedAt: null },
+        },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_1')).resolves.toEqual({
+        tenantId: 'tenant_live',
+        workspaceId: 'ws_1',
+      });
+    });
+
+    it('inactive mapping is ignored', async () => {
+      const { service, prisma } = buildService();
+      // findMany already filters status:active — inactive never returned
+      prisma.twentyConnection.findMany.mockResolvedValue([]);
+      prisma.tenant.findMany.mockResolvedValue([]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.twentyConnection.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { workspaceId: 'ws_1', status: 'active' },
+        }),
+      );
+    });
+
+    it('duplicate deprecated Tenant.twentyWorkspaceId matches → fail closed', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([]);
+      prisma.tenant.findMany.mockResolvedValue([
+        { id: 'legacy_b', twentyWorkspaceId: 'ws_legacy' },
+        { id: 'legacy_a', twentyWorkspaceId: 'ws_legacy' },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_legacy')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('canonical TwentyConnection mapping wins over deprecated fallback', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([
+        {
+          tenantId: 'canonical',
+          workspaceId: 'ws_1',
+          status: 'active',
+          tenant: { id: 'canonical', deletedAt: null },
+        },
+      ]);
+      prisma.tenant.findMany.mockResolvedValue([{ id: 'legacy_only', twentyWorkspaceId: 'ws_1' }]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_1')).resolves.toEqual({
+        tenantId: 'canonical',
+        workspaceId: 'ws_1',
+      });
+      expect(prisma.tenant.findMany).not.toHaveBeenCalled();
+    });
+
+    it('cross-tenant resolution cannot arbitrarily select the first DB row', async () => {
+      const { service, prisma } = buildService();
+      // Same ambiguous set regardless of order — never silently pick index 0
+      prisma.twentyConnection.findMany.mockResolvedValue([
+        {
+          tenantId: 'first_row',
+          workspaceId: 'ws_amb',
+          status: 'active',
+          tenant: { id: 'first_row', deletedAt: null },
+        },
+        {
+          tenantId: 'second_row',
+          workspaceId: 'ws_amb',
+          status: 'active',
+          tenant: { id: 'second_row', deletedAt: null },
+        },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_amb')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('single legacy fallback works when no TwentyConnection rows', async () => {
+      const { service, prisma } = buildService();
+      prisma.twentyConnection.findMany.mockResolvedValue([]);
+      prisma.tenant.findMany.mockResolvedValue([
+        { id: 'legacy_only', twentyWorkspaceId: 'ws_leg' },
+      ]);
+
+      await expect(service.resolveByTwentyWorkspaceId('ws_leg')).resolves.toEqual({
+        tenantId: 'legacy_only',
+        workspaceId: 'ws_leg',
+      });
+    });
   });
 });

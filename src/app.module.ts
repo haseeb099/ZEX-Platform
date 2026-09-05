@@ -19,6 +19,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { WhyNowModule } from './why-now/why-now.module';
 import { ResearchAgentModule } from './research-agent/research-agent.module';
 import { AiSdrModule } from './ai-sdr/ai-sdr.module';
+import { ActionFeedModule } from './action-feed/action-feed.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { AiSdrModule } from './ai-sdr/ai-sdr.module';
     WhyNowModule,
     ResearchAgentModule,
     AiSdrModule,
+    ActionFeedModule,
   ],
   providers: [
     {

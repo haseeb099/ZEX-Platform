@@ -6,6 +6,7 @@ import {
   CreateSdrDraftDto,
   CreateSdrSequenceDto,
   IngestReplyDto,
+  RejectSdrDraftDto,
   SendSdrDraftDto,
 } from './dto/ai-sdr.dto';
 import { AiSdrService } from './ai-sdr.service';
@@ -57,6 +58,15 @@ export class AiSdrController {
   @Post('sdr/drafts/:draftId/revoke')
   revoke(@Param('tenantId') tenantId: string, @Param('draftId') draftId: string) {
     return this.sdr.revokeApproval(tenantId, draftId);
+  }
+
+  @Post('sdr/drafts/:draftId/reject')
+  rejectDraft(
+    @Param('tenantId') tenantId: string,
+    @Param('draftId') draftId: string,
+    @Body() dto: RejectSdrDraftDto,
+  ) {
+    return this.sdr.rejectDraft(tenantId, draftId, dto.rejectedBy || 'admin');
   }
 
   @Post('sdr/drafts/:draftId/send')

@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { CryptoService } from '@src/common/crypto.service';
@@ -183,5 +188,56 @@ export class TenantService {
       },
       createdAt: tenant.createdAt,
     };
+  }
+
+  /**
+   * Resolve Platform tenant id from Twenty workspace id (CRM bridge).
+   *
+   * Fail-closed and deterministic:
+   * 1. Active TwentyConnection rows for workspaceId (canonical)
+   * 2. Keep only mappings whose tenant is non-deleted
+   * 3. Exactly one → return; zero → optional legacy fallback; >1 → ConflictException
+   *
+   * Never uses findFirst() among duplicates. Legacy Tenant.twentyWorkspaceId is
+   * migration compatibility only — consulted only when zero canonical active mappings.
+   */
+  async resolveByTwentyWorkspaceId(workspaceId: string) {
+    const connections = await this.prisma.twentyConnection.findMany({
+      where: { workspaceId, status: 'active' },
+      include: { tenant: true },
+    });
+
+    const validConnections = connections.filter(c => c.tenant && c.tenant.deletedAt == null);
+
+    if (validConnections.length > 1) {
+      throw new ConflictException({
+        message: 'Ambiguous Twenty workspace mapping',
+        workspaceId,
+        tenantIds: validConnections.map(c => c.tenantId).sort(),
+      });
+    }
+
+    if (validConnections.length === 1) {
+      return { tenantId: validConnections[0].tenantId, workspaceId };
+    }
+
+    // Zero canonical active mappings — deprecated fallback (migration compatibility only).
+    const legacyTenants = await this.prisma.tenant.findMany({
+      where: { twentyWorkspaceId: workspaceId, deletedAt: null },
+    });
+
+    if (legacyTenants.length > 1) {
+      throw new ConflictException({
+        message: 'Ambiguous legacy Twenty workspace mapping',
+        workspaceId,
+        tenantIds: legacyTenants.map(t => t.id).sort(),
+      });
+    }
+
+    if (legacyTenants.length === 1) {
+      return { tenantId: legacyTenants[0].id, workspaceId };
+    }
+
+    throw new NotFoundException('Tenant not found for workspace');
   }
 }
