@@ -285,6 +285,9 @@ export class AiSdrService {
     if (draft.status === 'SUPERSEDED') {
       throw new BadRequestException('Cannot approve a superseded draft');
     }
+    if (draft.status === 'REJECTED') {
+      throw new BadRequestException('Cannot approve a rejected draft');
+    }
     if (draft.status === 'SENT') {
       throw new BadRequestException('Draft already sent');
     }
@@ -359,6 +362,60 @@ export class AiSdrService {
       triggeredBy,
     });
     return { revoked: true, draftId };
+  }
+
+  /**
+   * Explicit human reject of a draft. Distinct from supersede (regenerate) and revoke (undo approval).
+   * Rejected drafts cannot be approved or sent; a new draft may still be generated later.
+   */
+  async rejectDraft(
+    tenantId: string,
+    draftId: string,
+    rejectedBy = 'admin',
+    triggeredBy = 'admin-api',
+  ) {
+    const draft = await this.requireDraft(tenantId, draftId);
+    if (draft.status === 'SENT') {
+      throw new BadRequestException('Cannot reject a sent draft');
+    }
+    if (draft.status === 'REJECTED') {
+      return {
+        rejected: true,
+        idempotent: true,
+        draft: this.serializeDraft(draft),
+      };
+    }
+    if (draft.status === 'SUPERSEDED') {
+      throw new BadRequestException('Cannot reject a superseded draft');
+    }
+
+    const before = { status: draft.status };
+    await this.prisma.sdrApproval.updateMany({
+      where: { tenantId, draftId, status: 'ACTIVE' },
+      data: { status: 'REVOKED', revokedAt: new Date() },
+    });
+    const updated = await this.prisma.sdrDraft.update({
+      where: { id: draft.id },
+      data: { status: 'REJECTED' },
+    });
+
+    await this.audit.log({
+      tenantId,
+      action: 'sdr_draft_rejected',
+      resourceType: 'SdrDraft',
+      resourceTwentyId: draft.id,
+      before,
+      after: {
+        status: 'REJECTED',
+        sequenceId: draft.sequenceId,
+        rejectedBy,
+        version: draft.version,
+        contentHash: draft.contentHash,
+      },
+      triggeredBy,
+    });
+
+    return { rejected: true, idempotent: false, draft: this.serializeDraft(updated) };
   }
 
   async sendDraft(
@@ -879,6 +936,9 @@ export class AiSdrService {
     }
     if (draft.status === 'SUPERSEDED') {
       throw new BadRequestException('Cannot send superseded draft');
+    }
+    if (draft.status === 'REJECTED') {
+      throw new BadRequestException('Cannot send a rejected draft');
     }
     if (!sequence.targetEmail) {
       throw new BadRequestException('Cannot send without explicit targetEmail');

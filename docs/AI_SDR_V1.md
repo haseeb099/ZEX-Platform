@@ -57,6 +57,10 @@ Worker reloads DB state before send (never trusts enqueue-only snapshot).
 
 Creating a new draft of the same purpose marks prior DRAFT/AWAITING/APPROVED drafts `SUPERSEDED` and revokes their approvals.
 
+## Rejected drafts
+
+`POST .../sdr/drafts/:draftId/reject` sets durable `REJECTED` (distinct from supersede/revoke). Rejected drafts cannot be approved or sent. Audited as `sdr_draft_rejected`. A later regenerated draft may still be created.
+
 ## Recipient safety
 
 `targetEmail` must be supplied explicitly when creating the sequence.

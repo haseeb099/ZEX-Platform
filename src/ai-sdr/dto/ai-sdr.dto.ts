@@ -31,6 +31,12 @@ export class ApproveSdrDraftDto {
   approvedBy?: string;
 }
 
+export class RejectSdrDraftDto {
+  @IsOptional()
+  @IsString()
+  rejectedBy?: string;
+}
+
 export class SendSdrDraftDto {
   @IsOptional()
   @IsBoolean()

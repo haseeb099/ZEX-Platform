@@ -489,7 +489,7 @@ model SdrDraft {
   doNotClaimApplied    Json?
   grounding            Json?
   confidence           Float    @default(0.5)
-  /// DRAFT | AWAITING_APPROVAL | APPROVED | SUPERSEDED | SENT
+  /// DRAFT | AWAITING_APPROVAL | APPROVED | SUPERSEDED | SENT | REJECTED
   status               String   @default("DRAFT")
   contentHash          String
   generatedAt          DateTime @default(now())

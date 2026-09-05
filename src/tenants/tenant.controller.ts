@@ -16,6 +16,11 @@ export class TenantController {
     return this.tenants.createTenant(dto);
   }
 
+  @Get('by-workspace/:workspaceId')
+  resolveByWorkspace(@Param('workspaceId') workspaceId: string) {
+    return this.tenants.resolveByTwentyWorkspaceId(workspaceId);
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     const tenant = await this.tenants.getTenantSafe(id);

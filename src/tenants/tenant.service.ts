@@ -184,4 +184,20 @@ export class TenantService {
       createdAt: tenant.createdAt,
     };
   }
+
+  /** Resolve Platform tenant id from Twenty workspace id (CRM bridge). */
+  async resolveByTwentyWorkspaceId(workspaceId: string) {
+    const connection = await this.prisma.twentyConnection.findFirst({
+      where: { workspaceId, status: 'active' },
+      include: { tenant: true },
+    });
+    if (connection?.tenant && !connection.tenant.deletedAt) {
+      return { tenantId: connection.tenantId, workspaceId };
+    }
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { twentyWorkspaceId: workspaceId, deletedAt: null },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found for workspace');
+    return { tenantId: tenant.id, workspaceId };
+  }
 }
