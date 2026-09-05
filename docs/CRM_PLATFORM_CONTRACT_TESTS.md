@@ -96,6 +96,19 @@ Also covered:
 
 Those remain follow-ups (staging against pinned ZEX-CRM recommended).
 
+## Agent Control Center (ZEX-39)
+
+`test/contract/agent-control.contract-spec.ts` covers:
+
+- Overview for `research_agent` + `ai_sdr` (permissions, approval policy, status)
+- Unmapped audit rows not attributed
+- Pause/resume + pause enforcement (research + SDR outbound)
+- Reply/unsubscribe safety while AI SDR paused (no adaptation drafts)
+- Reversible undo for control mutations; irreversible refuse for sent email / booked meeting
+- Cross-tenant isolation for overview / pause / undo
+
+See `docs/AGENT_CONTROL_CENTER_V1.md`.
+
 ## CI
 
 GitHub Actions runs `npx prisma migrate deploy` then `npm run test:contract` against workflow Postgres and Redis services.

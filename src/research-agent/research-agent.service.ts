@@ -7,6 +7,7 @@ import {
   ProspectResearchRun,
 } from '@prisma/client';
 import { Queue } from 'bullmq';
+import { AgentControlService } from '@src/agent-control/agent-control.service';
 import { AuditService } from '@src/audit/audit.service';
 import { CompanyBrainService } from '@src/company-brain/company-brain.service';
 import { companyBrainPayloadSchema } from '@src/company-brain/company-brain.types';
@@ -30,6 +31,7 @@ export class ResearchAgentService {
     private readonly audit: AuditService,
     private readonly companyBrain: CompanyBrainService,
     private readonly provider: ProspectResearchProviderService,
+    private readonly agentControl: AgentControlService,
     @InjectQueue(PROSPECT_RESEARCH_QUEUE) private readonly queue: Queue,
   ) {}
 
@@ -43,6 +45,9 @@ export class ResearchAgentService {
     input: { sync?: boolean; fixture?: ResearchFixture } = {},
     triggeredBy = 'admin-api',
   ) {
+    // ZEX-39: fail-closed when Research Agent is paused (before enqueue or sync work)
+    await this.agentControl.assertAgentNotPaused(tenantId, 'research_agent', triggeredBy);
+
     const candidate = await this.requireCandidate(tenantId, candidateId);
     if (!this.isResearchable(candidate.status)) {
       await this.audit.log({
@@ -130,6 +135,29 @@ export class ResearchAgentService {
       where: { id: input.runId, tenantId: input.tenantId, prospectCandidateId: input.candidateId },
     });
     if (!run) throw new NotFoundException('Research run not found');
+
+    // ZEX-39: re-check pause at execution time (queued jobs fail closed)
+    if (await this.agentControl.isPaused(input.tenantId, 'research_agent')) {
+      const blocked = await this.prisma.prospectResearchRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'BLOCKED',
+          completedAt: new Date(),
+          error: 'Blocked: research_agent is paused',
+          startedAt: run.startedAt ?? new Date(),
+        },
+      });
+      await this.audit.log({
+        tenantId: input.tenantId,
+        action: 'research_blocked_agent_paused',
+        resourceType: 'ProspectResearchRun',
+        resourceTwentyId: run.id,
+        success: false,
+        after: { prospectCandidateId: input.candidateId, agentId: 'research_agent' },
+        triggeredBy: input.triggeredBy,
+      });
+      return this.serializeRun(blocked, []);
+    }
 
     // Critical safety: re-check approval at execution time (not only at enqueue)
     const candidate = await this.requireCandidate(input.tenantId, input.candidateId);

@@ -20,6 +20,7 @@ import { WhyNowModule } from './why-now/why-now.module';
 import { ResearchAgentModule } from './research-agent/research-agent.module';
 import { AiSdrModule } from './ai-sdr/ai-sdr.module';
 import { ActionFeedModule } from './action-feed/action-feed.module';
+import { AgentControlModule } from './agent-control/agent-control.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { ActionFeedModule } from './action-feed/action-feed.module';
     ResearchAgentModule,
     AiSdrModule,
     ActionFeedModule,
+    AgentControlModule,
   ],
   providers: [
     {
