@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.6
 # Production image for ZEX-Platform (provider-agnostic).
 # Tag ONLY with immutable commit SHA or release id — never :latest.
 

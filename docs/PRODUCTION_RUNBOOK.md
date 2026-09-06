@@ -168,6 +168,7 @@ Retention (guidance): keep daily backups ≥7 days, weekly ≥4 weeks, and pre-m
   - `ALLOW_PRODUCTION_RESTORE=true`
   - `CONFIRM_PHRASE=RESTORE_PRODUCTION_CONFIRM`
 - Refuses when disposable URL equals production URL without that confirmation
+- **Fail closed:** any non-zero `pg_restore` exit status fails the restore script (do not reinterpret stderr `WARNING`/`ERROR` wording)
 
 ```bash
 export BACKUP_FILE=./backups/zex-platform_....dump

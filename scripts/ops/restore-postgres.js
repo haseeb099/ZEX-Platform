@@ -16,7 +16,11 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
-const { resolveRestoreTarget, redactSecrets } = require('./lib/production-guards');
+const {
+  resolveRestoreTarget,
+  redactSecrets,
+  assertRestoreCommandSuccess,
+} = require('./lib/production-guards');
 
 function parseDatabaseUrl(url) {
   const u = new URL(url);
@@ -60,11 +64,12 @@ function main() {
   console.log(`Restoring into ${target.mode} database "${parsed.database}" on ${parsed.host}`);
 
   const pgRestore = process.env.PG_RESTORE_BIN || 'pg_restore';
-  let result = spawnSync(
-    pgRestore,
-    ['--clean', '--if-exists', '--no-owner', '--no-acl', '-d', parsed.database, backupFile],
-    { env, encoding: 'utf8' },
-  );
+  const restoreArgs = ['--clean', '--if-exists', '--no-owner', '--no-acl', '-d', parsed.database, backupFile];
+  // Allow PG_RESTORE_BIN to point at a .js fixture/wrapper (tests + portable shims).
+  let result =
+    /\.js$/i.test(pgRestore)
+      ? spawnSync(process.execPath, [pgRestore, ...restoreArgs], { env, encoding: 'utf8' })
+      : spawnSync(pgRestore, restoreArgs, { env, encoding: 'utf8' });
 
   if (result.error && result.error.code === 'ENOENT' && process.env.RESTORE_USE_DOCKER === '1') {
     const container = process.env.RESTORE_DOCKER_CONTAINER || 'twenty-automation-db';
@@ -92,15 +97,11 @@ function main() {
     );
   }
 
-  // pg_restore may return 1 with warnings; treat only hard failures as fatal when stderr has ERROR
-  const stderr = (result.stderr && result.stderr.toString()) || '';
-  if (result.status !== 0 && /ERROR:/i.test(stderr)) {
-    console.error(redactSecrets(stderr || 'pg_restore failed'));
-    process.exit(result.status || 1);
-  }
-  if (result.status !== 0 && result.error) {
-    console.error(redactSecrets(result.error.message));
-    process.exit(1);
+  // Fail closed: any non-zero pg_restore exit is a restore failure (ignore stderr wording).
+  const check = assertRestoreCommandSuccess(result, 'pg_restore');
+  if (!check.ok) {
+    console.error(check.error);
+    process.exit(check.status || 1);
   }
 
   console.log(`OK restore completed (mode=${target.mode})`);

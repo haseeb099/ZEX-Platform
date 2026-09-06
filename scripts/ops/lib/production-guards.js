@@ -101,9 +101,62 @@ function assertBackupArtifact(filePath, stats, minBytes = 64) {
   return { ok: true, size: stats.size };
 }
 
+/**
+ * Fail closed on any non-zero pg_restore exit. Do not reinterpret stderr wording.
+ * @param {{ status?: number | null, stderr?: string | Buffer, error?: Error }} result
+ * @param {string} [label]
+ */
+function assertRestoreCommandSuccess(result, label = 'pg_restore') {
+  if (result && result.status === 0) {
+    return { ok: true };
+  }
+  const status = result && result.status != null ? result.status : 1;
+  const detail = redactSecrets(
+    (result && result.stderr && result.stderr.toString()) ||
+      (result && result.error && result.error.message) ||
+      `${label} failed with exit status ${status}`,
+  );
+  return { ok: false, status: status || 1, error: detail || `${label} failed` };
+}
+
+/**
+ * Validate pg_restore --list output for a custom-format (-Fc) dump.
+ * Size alone is never sufficient — structural list must succeed.
+ * @param {{ status?: number | null, stdout?: string | Buffer, stderr?: string | Buffer, error?: Error }} result
+ */
+function assertCustomFormatDumpList(result) {
+  if (!result || result.status !== 0) {
+    const detail = redactSecrets(
+      (result && result.stderr && result.stderr.toString()) ||
+        (result && result.error && result.error.message) ||
+        'pg_restore --list failed',
+    );
+    return {
+      ok: false,
+      error: `Backup structural validation failed (pg_restore --list): ${detail}`,
+    };
+  }
+  const out = ((result.stdout && result.stdout.toString()) || '').trim();
+  if (!out) {
+    return { ok: false, error: 'Backup structural validation failed: empty pg_restore --list output' };
+  }
+  // Custom-format TOC typically includes archive header and numbered entries.
+  const hasHeader = /Archive created by pg_dump/i.test(out) || /TOC Entries/i.test(out);
+  const hasEntry = /^\d+;\s+\d+\s+\d+/m.test(out);
+  if (!hasHeader && !hasEntry) {
+    return {
+      ok: false,
+      error: 'Backup structural validation failed: pg_restore --list output is not a custom-format TOC',
+    };
+  }
+  return { ok: true, listBytes: out.length };
+}
+
 module.exports = {
   validatePlatformImageRef,
   resolveRestoreTarget,
   redactSecrets,
   assertBackupArtifact,
+  assertRestoreCommandSuccess,
+  assertCustomFormatDumpList,
 };

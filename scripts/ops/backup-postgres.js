@@ -16,7 +16,7 @@
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { assertBackupArtifact, redactSecrets } = require('./lib/production-guards');
+const { assertBackupArtifact, assertCustomFormatDumpList, redactSecrets } = require('./lib/production-guards');
 
 function parseDatabaseUrl(url) {
   const u = new URL(url);
@@ -27,6 +27,27 @@ function parseDatabaseUrl(url) {
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, '').split('?')[0],
   };
+}
+
+/**
+ * Structural validation for pg_dump -Fc: pg_restore --list must succeed.
+ * Host binary first; Docker fallback mirrors dump path (BACKUP_USE_DOCKER=1).
+ */
+function listCustomFormatDump(outPath, env) {
+  const pgRestore = process.env.PG_RESTORE_BIN || 'pg_restore';
+  let listResult = spawnSync(pgRestore, ['--list', outPath], { env, encoding: 'utf8' });
+
+  if (listResult.error && listResult.error.code === 'ENOENT' && process.env.BACKUP_USE_DOCKER === '1') {
+    const container = process.env.BACKUP_DOCKER_CONTAINER || 'twenty-automation-db';
+    const dump = fs.readFileSync(outPath);
+    listResult = spawnSync(
+      'docker',
+      ['exec', '-i', container, 'pg_restore', '--list', '-'],
+      { input: dump, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+  }
+
+  return listResult;
 }
 
 function main() {
@@ -98,6 +119,13 @@ function main() {
     process.exit(1);
   }
 
+  const listResult = listCustomFormatDump(outPath, env);
+  const structural = assertCustomFormatDumpList(listResult);
+  if (!structural.ok) {
+    console.error(structural.error);
+    process.exit(1);
+  }
+
   const meta = {
     createdAt: new Date().toISOString(),
     environment: envName,
@@ -107,10 +135,12 @@ function main() {
     bytes: stats.size,
     database: env.PGDATABASE,
     host: env.PGHOST,
+    structuralValidation: 'pg_restore --list',
   };
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
   console.log(`OK backup written: ${fileName} (${stats.size} bytes)`);
+  console.log('OK structural validation: pg_restore --list');
   console.log(`OK metadata: ${path.basename(metaPath)}`);
   process.exit(0);
 }
