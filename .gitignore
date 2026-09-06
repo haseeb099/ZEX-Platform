@@ -4,8 +4,16 @@ coverage/
 .env
 .env.local
 .env.*.local
+.env.production
+.env.staging
+deploy/.env.production
+deploy/.env.production.local
 *.log
 .DS_Store
 .idea/
 .vscode/
 prisma/migrations/**/migration_lock.toml.bak
+backups/
+*.dump
+.tmp/
+.tmp-ops-meta.json

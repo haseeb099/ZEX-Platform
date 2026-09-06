@@ -578,7 +578,6 @@ describe('Agent Control Center contract (ZEX-39)', () => {
         )
       ).statusCode,
     ).toBe(400);
-    const sentHist = histActions.find(a => a.actionType === 'sdr_sent');
     // may be outside research filter — check global list
     const allHist = await admin('GET', `/api/v1/admin/tenants/${tenantA}/agent-actions?limit=100`);
     const sentAction = (allHist.body.actions as typeof histActions).find(

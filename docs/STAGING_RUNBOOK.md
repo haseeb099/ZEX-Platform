@@ -1,6 +1,8 @@
 # Staging runbook — pinned ZEX-CRM/Twenty + ZEX-Platform
 
-Operational steps for local/staging validation only. **Not for production.**
+Operational steps for **local/staging** validation only. **Not for production.**
+
+For production deployment, backups, migrate-deploy, and rollback see **`docs/PRODUCTION_RUNBOOK.md`** (ZEX-27). Staging and production must use **separate** secrets, Postgres databases, and Redis instances/namespaces.
 
 ## Prerequisites
 
@@ -8,7 +10,7 @@ Operational steps for local/staging validation only. **Not for production.**
 - **Node.js `^24.5.0`** (ZEX-CRM enforces this in `yarn.config.cjs`; Node 22 fails post-install)
 - Corepack + **Yarn 4.13.0** (`packageManager` in ZEX-CRM `package.json`)
 - ZEX-CRM at pinned commit (`zex/twenty-upstream.json`)
-- ZEX-Platform on `test/pinned-twenty-staging-validation` (PR #7)
+- ZEX-Platform at an **immutable git SHA** on `main` or a release branch (do not deploy floating `latest`). Historical evidence for the original pinned-Twenty gate used branch `test/pinned-twenty-staging-validation` (PR #7); prefer SHA-pinned checkouts going forward.
 
 ### Windows notes (verified 2026-08-30)
 

@@ -19,6 +19,8 @@ export class HealthService {
     return {
       status,
       timestamp: new Date().toISOString(),
+      /** Optional deploy provenance — set ZEX_RELEASE_SHA at deploy time (never a secret). */
+      release: process.env.ZEX_RELEASE_SHA || null,
       checks,
     };
   }

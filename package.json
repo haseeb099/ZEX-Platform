@@ -20,8 +20,14 @@
     "test:contract": "jest --config ./test/jest-contract.json --runInBand",
     "test:staging:twenty": "ts-node -r tsconfig-paths/register scripts/staging/pinned-twenty-smoke.ts",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "ops:validate-image": "node scripts/ops/validate-image-ref.js",
+    "ops:backup": "node scripts/ops/backup-postgres.js",
+    "ops:restore": "node scripts/ops/restore-postgres.js",
+    "ops:smoke": "node scripts/ops/smoke-production.js",
+    "test:ops": "jest --config ./test/jest-ops.json"
   },
   "dependencies": {
     "@fastify/static": "^7.0.4",
