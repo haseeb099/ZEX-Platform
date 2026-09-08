@@ -381,7 +381,19 @@ describe('AI SDR contract (ZEX-36)', () => {
       },
     );
     expect(reply.statusCode).toBeLessThan(300);
+    // Sequence stays REPLIED after inbound reply; adapt drafts may be AWAITING_APPROVAL.
     expect(reply.body.sequenceStatus).toBe('REPLIED');
+    const afterReply = await admin(
+      'GET',
+      `/api/v1/admin/tenants/${tenantA}/sdr/sequences/${sequenceId}`,
+    );
+    expect(afterReply.statusCode).toBe(200);
+    expect(afterReply.body.status).toBe('REPLIED');
+    const adaptDrafts = (
+      afterReply.body.drafts as Array<{ purpose: string; status: string }>
+    ).filter(d => d.purpose === 'reply' || d.purpose === 'meeting');
+    expect(adaptDrafts.length).toBeGreaterThanOrEqual(1);
+    expect(adaptDrafts.every(d => d.status === 'AWAITING_APPROVAL')).toBe(true);
 
     // Worker/execute follow-up must not send
     const followSendAfterReply = await admin(
@@ -597,8 +609,18 @@ describe('AI SDR contract (ZEX-36)', () => {
       },
     );
     expect(valid.statusCode).toBeLessThan(300);
+    // POSITIVE reply → sequence REPLIED; suggested reply/meeting drafts await approval separately.
     expect(valid.body.sequenceStatus).toBe('REPLIED');
     expect(await statusOf(seqA.sequenceId)).toBe('REPLIED');
+    const adaptAwaiting = await prisma.sdrDraft.count({
+      where: {
+        tenantId: tenantA,
+        sequenceId: seqA.sequenceId,
+        purpose: { in: ['reply', 'meeting'] },
+        status: 'AWAITING_APPROVAL',
+      },
+    });
+    expect(adaptAwaiting).toBeGreaterThanOrEqual(1);
     expect(await statusOf(seqB.sequenceId)).toBe(beforeB);
     expect(await replyCount(seqA.sequenceId)).toBe(repliesBeforeA + 1);
     expect(beforeA).toBe('ACTIVE');

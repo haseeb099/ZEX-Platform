@@ -4,14 +4,18 @@ Evidence for ZEX-31 final gate: ZEX-Platform against **real pinned ZEX-CRM/Twent
 
 ## Versions
 
+Historical evidence for the ZEX-31 pinned-Twenty gate (do not treat branch names as production pins):
+
 | Component | Commit / ref |
 |-----------|----------------|
-| ZEX-Platform | `test/pinned-twenty-staging-validation` (PR #7) |
+| ZEX-Platform (historical branch) | `test/pinned-twenty-staging-validation` (PR #7) — prefer immutable SHA on `main` for new runs |
 | ZEX-CRM | `c4bb94bddc8b5915ea4f48bcf8a423e8e5064d16` |
 | Pinned Twenty upstream baseline | `99e2c474a3dc256256543be405ef3c7702a63926` (`zex/twenty-upstream.json`) |
 | ZEX core patch head | `8ea3af933461c8df4c01653862d8b8ced6758f32` (Windows/local dev — temporary) |
 | Node (live run) | `v24.19.0` (OpenJS Node.js LTS via winget) |
 | Yarn (live run) | `4.13.0` (Corepack, repo `packageManager`) |
+
+Production deploy contract: `docs/PRODUCTION_RUNBOOK.md`.
 
 ## Environment topology
 

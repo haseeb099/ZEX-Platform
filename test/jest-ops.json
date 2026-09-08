@@ -1,0 +1,6 @@
+{
+  "moduleFileExtensions": ["js", "json"],
+  "rootDir": "..",
+  "testMatch": ["<rootDir>/test/ops/**/*.spec.js"],
+  "testEnvironment": "node"
+}

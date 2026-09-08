@@ -259,9 +259,15 @@ export class AiSdrService {
       },
     });
 
-    await this.prisma.sdrSequence.update({
-      where: { id: sequenceId },
-      data: { status: sequence.status === 'REPLIED' ? 'REPLIED' : 'AWAITING_APPROVAL' },
+    // Drafts await approval; sequence only moves to AWAITING_APPROVAL while still in the
+    // pre-stop lifecycle. Never demote stop states (esp. REPLIED after inbound reply) —
+    // reply/meeting adapt drafts must not reopen a stopped sequence (race-safe vs async send).
+    await this.prisma.sdrSequence.updateMany({
+      where: {
+        id: sequenceId,
+        status: { notIn: [...STOP_STATUSES] },
+      },
+      data: { status: 'AWAITING_APPROVAL' },
     });
 
     await this.audit.log({
@@ -326,8 +332,12 @@ export class AiSdrService {
       where: { id: draft.id },
       data: { status: 'APPROVED' },
     });
-    await this.prisma.sdrSequence.update({
-      where: { id: draft.sequenceId },
+    // Approving an adapt draft must not reopen a stopped sequence (REPLIED/CANCELLED/…).
+    await this.prisma.sdrSequence.updateMany({
+      where: {
+        id: draft.sequenceId,
+        status: { notIn: [...STOP_STATUSES] },
+      },
       data: { status: 'APPROVED' },
     });
 
@@ -526,6 +536,30 @@ export class AiSdrService {
     });
 
     try {
+      // Fail closed if a reply/stop landed after the initial gate (queued worker race).
+      const liveSequence = await this.requireSequence(tenantId, sequence.id);
+      if (STOP_STATUSES.has(liveSequence.status)) {
+        await this.prisma.sdrMessage.update({
+          where: { id: message.id },
+          data: {
+            status: 'FAILED',
+            failedAt: new Date(),
+            error: `Cannot send while sequence is ${liveSequence.status}`,
+            crmSyncStatus: 'NONE',
+          },
+        });
+        await this.audit.log({
+          tenantId,
+          action: 'sdr_send_blocked_unapproved',
+          resourceType: 'SdrDraft',
+          resourceTwentyId: draftId,
+          success: false,
+          after: { reason: `sequence_${liveSequence.status}_pre_provider` },
+          triggeredBy,
+        });
+        throw new BadRequestException(`Cannot send while sequence is ${liveSequence.status}`);
+      }
+
       await this.prisma.sdrMessage.update({
         where: { id: message.id },
         data: { status: 'SENDING' },
@@ -559,10 +593,20 @@ export class AiSdrService {
         where: { id: draft.id },
         data: { status: 'SENT' },
       });
-      await this.prisma.sdrSequence.update({
-        where: { id: sequence.id },
+      // Never demote REPLIED/CANCELLED/etc. if a reply stopped the sequence during send.
+      const activated = await this.prisma.sdrSequence.updateMany({
+        where: {
+          id: sequence.id,
+          status: { notIn: [...STOP_STATUSES] },
+        },
         data: { status: 'ACTIVE', crmSyncStatus: 'PENDING' },
       });
+      if (activated.count === 0) {
+        await this.prisma.sdrSequence.updateMany({
+          where: { id: sequence.id },
+          data: { crmSyncStatus: 'PENDING' },
+        });
+      }
 
       await this.audit.log({
         tenantId,

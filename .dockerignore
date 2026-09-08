@@ -1,0 +1,22 @@
+# Exclude secrets, local artifacts, and non-runtime paths from the production image context.
+.git
+.github
+.cursor
+.env
+.env.*
+!.env.example
+**/.env.production
+**/.env.staging.local
+node_modules
+dist
+coverage
+*.log
+backups
+.tmp
+docs
+test
+scripts/staging
+.vscode
+.idea
+docker-compose.yml
+README.md
